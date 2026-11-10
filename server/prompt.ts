@@ -60,13 +60,13 @@ export function buildSystemPrompt(room: Room, self: Participant) {
   return lines.join('\n');
 }
 
-function speakerTag(room: Room, m: Message) {
+export function speakerTag(room: Room, m: Message) {
   if (m.role === 'human') return `【${humanLabel(room)}】`;
-  if (m.role === 'system') return '【系统】';
+  if (m.role === 'system') return m.kind === 'roll' ? '【骰子】' : '【系统】';
   return `【${m.speakerName}】`;
 }
 
-function bodyOf(m: Message) {
+export function bodyOf(m: Message) {
   const text = m.content.trim();
   return m.status === 'interrupted' ? `${text}……（发言被打断）` : text;
 }
@@ -78,15 +78,45 @@ export function usableHistory(messages: Message[]) {
   );
 }
 
-/** 为某个 AI 构建完整的请求消息 */
-export function buildAgentMessages(room: Room, self: Participant, history: Message[]): ChatMessage[] {
+/** 很多接口要求 user / assistant 交替出现，同一方连续的消息合并成一条 */
+export function turnBuilder() {
   const turns: ChatMessage[] = [];
   const push = (role: 'user' | 'assistant', content: string) => {
     const last = turns[turns.length - 1];
-    // 很多接口要求 user / assistant 交替出现，同一方连续的消息合并成一条
     if (last && last.role === role) last.content += `\n\n${content}`;
     else turns.push({ role, content });
   };
+  return { turns, push };
+}
+
+/** 拟人模式唯一的提示词 */
+export const HUMANLIKE_PROMPT = '你是一个真实的人，正在和另一个真实的人聊天。请像真人一样和对方自然地对话。';
+
+/**
+ * 拟人模式：只告诉模型它是真人、在和真人聊天，不加任何多人对话规则、名字标签或提醒。
+ * 只有当对方不止一个人时，才在消息前加上说话人的名字，否则模型分不清谁在说话。
+ */
+export function buildHumanlikeMessages(room: Room, self: Participant, history: Message[]): ChatMessage[] {
+  const usable = usableHistory(history).filter((m) => m.role !== 'system');
+  const isSelf = (m: Message) => m.role === 'ai' && m.participantId === self.id;
+  const others = new Set(usable.filter((m) => !isSelf(m)).map((m) => (m.role === 'human' ? '#human' : m.participantId)));
+  const withNames = others.size > 1;
+  const { turns, push } = turnBuilder();
+  for (const m of usable) {
+    const text = m.status === 'interrupted' ? `${m.content.trim()}……` : m.content.trim();
+    if (isSelf(m)) push('assistant', text);
+    else push('user', withNames ? `${m.role === 'human' ? room.settings.humanName : m.speakerName}：${text}` : text);
+  }
+  if (turns.length === 0 || turns[0].role === 'assistant') turns.unshift({ role: 'user', content: '（对话开始）' });
+  if (turns[turns.length - 1].role === 'assistant') turns.push({ role: 'user', content: '（继续）' });
+  const system = self.persona.trim() ? `${HUMANLIKE_PROMPT}\n\n${self.persona.trim()}` : HUMANLIKE_PROMPT;
+  return [{ role: 'system', content: system }, ...turns];
+}
+
+/** 为某个 AI 构建完整的请求消息 */
+export function buildAgentMessages(room: Room, self: Participant, history: Message[]): ChatMessage[] {
+  if (room.settings.promptMode === 'humanlike') return buildHumanlikeMessages(room, self, history);
+  const { turns, push } = turnBuilder();
 
   for (const m of usableHistory(history)) {
     if (m.role === 'ai' && m.participantId === self.id) push('assistant', bodyOf(m));

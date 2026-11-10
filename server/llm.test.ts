@@ -134,7 +134,7 @@ test('读取模型列表（Magpie 的 display_name）', async () => {
     async (baseUrl) => {
       const models = await listModels(baseUrl, '');
       assert.deepEqual(models, [
-        { id: 'deepseek/deepseek-v4', name: undefined, ownedBy: 'deepseek' },
+        { id: 'deepseek/deepseek-v4', ownedBy: 'deepseek' },
         { id: 'openai/gpt-5', name: 'GPT-5', ownedBy: 'openai' },
       ]);
     },

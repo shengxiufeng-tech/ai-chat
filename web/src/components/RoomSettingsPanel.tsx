@@ -3,6 +3,7 @@ import type { Room, RoomSettings } from '../../../shared/types';
 import { patch } from '../api';
 import { attempt, toast } from '../toast';
 import { ModelInput } from './ModelInput';
+import { Field, Segmented, ToggleRow } from './ui';
 
 export function RoomSettingsPanel({ room }: { room: Room }) {
   const [title, setTitle] = useState(room.title);
@@ -28,66 +29,107 @@ export function RoomSettingsPanel({ room }: { room: Room }) {
 
   return (
     <div className="panel-section form-stack">
-      <label>
-        房间名
+      <Field label="房间名">
         <input value={title} onChange={(e) => setTitle(e.target.value)} />
-      </label>
-      <label>
-        <span className="label-text">场景 / 话题 <span className="hint">（所有 AI 都能看到）</span></span>
-        <textarea rows={5} value={scenario} onChange={(e) => setScenario(e.target.value)} />
-      </label>
-      <div className="row">
-        <label className="grow">
-          你的名字
-          <input value={s.humanName} onChange={(e) => set('humanName', e.target.value)} />
-        </label>
-        <label className="grow">
-          你的身份
-          <select value={s.humanRole} onChange={(e) => set('humanRole', e.target.value as RoomSettings['humanRole'])}>
-            <option value="host">主持人</option>
-            <option value="participant">参与者</option>
-            <option value="observer">旁观者</option>
-          </select>
-        </label>
-      </div>
-      <label>
-        谁来说下一句
-        <select value={s.turnMode} onChange={(e) => set('turnMode', e.target.value as RoomSettings['turnMode'])}>
-          <option value="round_robin">轮流发言（按角色列表顺序）</option>
-          <option value="moderator">AI 主持人决定（更自然，多一次模型调用）</option>
-          <option value="manual">手动点名（只有你点「发言」才说话）</option>
-        </select>
-        <span className="hint">无论哪种模式，你在消息里 @名字 都会让那位角色优先接话。</span>
-      </label>
-      {s.turnMode === 'moderator' && (
-        <label>
-          <span className="label-text">AI 主持人用的模型 <span className="hint">（留空则用全局默认模型，建议选个便宜快速的）</span></span>
-          <ModelInput value={s.moderatorModel} onChange={(v) => set('moderatorModel', v)} />
-        </label>
+      </Field>
+
+      <Field label="提示词风格">
+        <Segmented
+          block
+          value={s.promptMode}
+          onChange={(v) => set('promptMode', v)}
+          options={[
+            { value: 'standard', label: '多人对话', title: '告诉 AI 这是多人对话，有名字标签和发言规则' },
+            { value: 'humanlike', label: '拟人', title: '只告诉 AI：你是真人，在和另一个真人聊天' },
+          ]}
+        />
+        <span className="hint">
+          {s.promptMode === 'humanlike'
+            ? '拟人：只告诉每个 AI「你是一个真实的人，正在和另一个真实的人聊天」，没有其他任何设定和规则。'
+            : '多人对话：告诉 AI 这是多人对话，谁是谁、场景是什么、只代表自己发言等。'}
+        </span>
+      </Field>
+
+      {s.promptMode === 'standard' && (
+        <Field label="场景 / 话题" hint="（所有 AI 都能看到）">
+          <textarea rows={4} value={scenario} onChange={(e) => setScenario(e.target.value)} />
+        </Field>
       )}
-      <div className="row">
-        <label className="grow">
-          自动暂停
-          <select value={s.autoPauseAfter} onChange={(e) => set('autoPauseAfter', Number(e.target.value))}>
-            {[3, 6, 10, 20, 50].map((n) => (
-              <option key={n} value={n}>
-                AI 连续发言 {n} 次后
-              </option>
-            ))}
-            <option value={0}>不自动暂停（注意费用）</option>
-          </select>
-        </label>
-        <label className="grow">
-          回复篇幅
-          <select value={s.replyLength} onChange={(e) => set('replyLength', e.target.value as RoomSettings['replyLength'])}>
-            <option value="short">简短（聊天感）</option>
-            <option value="medium">适中</option>
-            <option value="long">详细</option>
-          </select>
-        </label>
+
+      <div className="divider" />
+      <div className="row" style={{ alignItems: 'flex-start' }}>
+        <div className="grow">
+          <Field label="你的名字">
+            <input value={s.humanName} onChange={(e) => set('humanName', e.target.value)} />
+          </Field>
+        </div>
       </div>
-      <label>
-        发言间隔：{(s.turnDelayMs / 1000).toFixed(1)} 秒
+      {s.promptMode === 'standard' && (
+        <Field label="你的身份">
+          <Segmented
+            block
+            value={s.humanRole}
+            onChange={(v) => set('humanRole', v)}
+            options={[
+              { value: 'host', label: '主持人' },
+              { value: 'participant', label: '参与者' },
+              { value: 'observer', label: '旁观者' },
+            ]}
+          />
+        </Field>
+      )}
+
+      <div className="divider" />
+      <Field label="谁来说下一句">
+        <Segmented
+          block
+          value={s.turnMode}
+          onChange={(v) => set('turnMode', v)}
+          options={[
+            { value: 'round_robin', label: '轮流', title: '按角色列表的顺序依次发言' },
+            { value: 'moderator', label: 'AI 主持', title: '每轮多调用一次模型，挑出最该接话的人' },
+            { value: 'manual', label: '手动点名', title: '只有你点「发言」或 @名字 时才说话' },
+          ]}
+        />
+        <span className="hint">
+          {s.turnMode === 'round_robin'
+            ? '按右侧角色列表的顺序依次发言。'
+            : s.turnMode === 'moderator'
+              ? '每轮多调用一次模型，根据上下文挑出最该接话的人，对话更自然。'
+              : '只有你点角色旁边的「发言」或 @名字 时 AI 才说话。'}
+          无论哪种模式，消息里 @名字 都会让那位角色优先接话。
+        </span>
+      </Field>
+      {s.turnMode === 'moderator' && (
+        <Field label="AI 主持人用的模型" hint="（留空则用全局默认模型，建议选个便宜快速的）">
+          <ModelInput value={s.moderatorModel} onChange={(v) => set('moderatorModel', v)} />
+        </Field>
+      )}
+      <Field label="自动暂停">
+        <select value={s.autoPauseAfter} onChange={(e) => set('autoPauseAfter', Number(e.target.value))}>
+          {[3, 6, 10, 20, 50].map((n) => (
+            <option key={n} value={n}>
+              AI 连续发言 {n} 次后暂停
+            </option>
+          ))}
+          <option value={0}>不自动暂停（注意费用）</option>
+        </select>
+      </Field>
+      {s.promptMode === 'standard' && (
+        <Field label="回复篇幅">
+          <Segmented
+            block
+            value={s.replyLength}
+            onChange={(v) => set('replyLength', v)}
+            options={[
+              { value: 'short', label: '简短' },
+              { value: 'medium', label: '适中' },
+              { value: 'long', label: '详细' },
+            ]}
+          />
+        </Field>
+      )}
+      <Field label={`发言间隔：${(s.turnDelayMs / 1000).toFixed(1)} 秒`}>
         <input
           type="range"
           min={0}
@@ -96,15 +138,13 @@ export function RoomSettingsPanel({ room }: { room: Room }) {
           value={s.turnDelayMs}
           onChange={(e) => set('turnDelayMs', Number(e.target.value))}
         />
-      </label>
-      <label className="checkbox">
-        <input
-          type="checkbox"
-          checked={s.replyOnHumanMessage}
-          onChange={(e) => set('replyOnHumanMessage', e.target.checked)}
-        />
-        暂停时我发言后，让一位 AI 接话
-      </label>
+      </Field>
+      <ToggleRow
+        label="我发言后让 AI 接话"
+        hint="暂停状态下你发消息后，让一位 AI 回应"
+        checked={s.replyOnHumanMessage}
+        onChange={(v) => set('replyOnHumanMessage', v)}
+      />
       <button className="btn btn-primary" disabled={!dirty} onClick={save}>
         {dirty ? '保存设置' : '已保存'}
       </button>

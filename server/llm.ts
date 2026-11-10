@@ -14,6 +14,8 @@ export interface ChatOptions {
   messages: ChatMessage[];
   temperature?: number;
   maxTokens?: number;
+  /** 思考强度，作为 reasoning_effort 发送；空则不发送 */
+  reasoningEffort?: string;
   signal?: AbortSignal;
 }
 
@@ -133,6 +135,7 @@ export async function* streamChat(opts: ChatOptions): AsyncGenerator<ChatChunk> 
   };
   if (opts.temperature !== undefined) body.temperature = opts.temperature;
   if (opts.maxTokens !== undefined) body.max_tokens = opts.maxTokens;
+  if (opts.reasoningEffort) body.reasoning_effort = opts.reasoningEffort;
 
   let res: Response;
   try {
@@ -244,8 +247,14 @@ export async function completeChat(opts: ChatOptions): Promise<string> {
 export async function listModels(baseUrl: string, apiKey: string): Promise<ModelInfo[]> {
   if (isMock(baseUrl)) {
     return [
-      { id: 'mock/fast', name: '模拟模型（快）', ownedBy: 'mock' },
-      { id: 'mock/thinker', name: '模拟模型（带思考）', ownedBy: 'mock' },
+      { id: 'mock/fast', name: '模拟模型（快）', ownedBy: 'mock', reasoning: false, reasoningLevels: [] },
+      {
+        id: 'mock/thinker',
+        name: '模拟模型（带思考）',
+        ownedBy: 'mock',
+        reasoning: true,
+        reasoningLevels: ['low', 'medium', 'high', 'xhigh'],
+      },
     ];
   }
   let res: Response;
@@ -261,9 +270,30 @@ export async function listModels(baseUrl: string, apiKey: string): Promise<Model
   const json: any = await res.json();
   const list: any[] = Array.isArray(json?.data) ? json.data : Array.isArray(json) ? json : [];
   return list
-    .filter((m) => typeof m?.id === 'string')
-    .map((m) => ({ id: m.id, name: m.display_name ?? m.name, ownedBy: m.owned_by }))
+    .filter((m) => typeof m?.id === 'string' && (m.kind === undefined || m.kind === 'chat'))
+    .map((m) => parseModel(m))
     .sort((a, b) => a.id.localeCompare(b.id));
+}
+
+/** 解析一条模型信息，兼容 Magpie 的 supported_reasoning_levels / reasoning_levels */
+export function parseModel(m: any): ModelInfo {
+  const info: ModelInfo = { id: m.id };
+  const name = m.display_name ?? m.name;
+  if (typeof name === 'string' && name) info.name = name;
+  if (typeof m.owned_by === 'string') info.ownedBy = m.owned_by;
+  if (typeof m.reasoning === 'boolean') info.reasoning = m.reasoning;
+  let levels: unknown[] | undefined;
+  if (Array.isArray(m.supported_reasoning_levels)) {
+    levels = m.supported_reasoning_levels.map((x: any) => (typeof x === 'string' ? x : x?.effort));
+  } else if (Array.isArray(m.reasoning_levels)) {
+    levels = m.reasoning_levels;
+  }
+  if (levels) {
+    info.reasoningLevels = [...new Set(levels.filter((x): x is string => typeof x === 'string' && x !== ''))];
+  }
+  const ctx = m.context_window ?? m.context_length;
+  if (typeof ctx === 'number' && ctx > 0) info.contextWindow = ctx;
+  return info;
 }
 
 // ---------------- 模拟模式 ----------------
@@ -302,6 +332,36 @@ async function* mockStream(opts: ChatOptions): AsyncGenerator<ChatChunk> {
     const names = [...last.matchAll(/^- 「([^」]+)」/gm)].map((m) => m[1]);
     await sleep(200, opts.signal);
     yield { content: names[Math.floor(Math.random() * names.length)] ?? '' };
+    return;
+  }
+
+  // 跑团：模拟守秘人、AI 队友和规则助手
+  if (system.includes('跑团的守秘人')) {
+    const afterRoll = last.includes('【骰子】');
+    const opening = last.includes('请开场');
+    const text = opening
+      ? '（模拟守秘人）傍晚，乌篷船靠上了白水镇的码头，雾气像湿棉花一样裹住了整个小镇。船夫压低声音说："天黑以后，别去镇中心的井边。"你打算怎么做？'
+      : afterRoll
+        ? '（模拟守秘人）根据骰子的结果，你注意到了一些不寻常的东西……雾里似乎传来若有若无的歌声。你接下来要做什么？'
+        : '（模拟守秘人）你仔细打量四周，似乎有什么东西藏在暗处。\n\n【规则小贴士】需要用「侦查」来发现隐藏的东西。[检定:侦查]';
+    for (const ch of Array.from(text)) {
+      await sleep(8, opts.signal);
+      yield { content: ch };
+    }
+    return;
+  }
+  if (system.includes('扮演 AI 调查员')) {
+    await sleep(100, opts.signal);
+    yield { content: '（模拟队友）我跟在你后面，帮你留意周围的动静。' };
+    return;
+  }
+  if (system.includes('规则助手')) {
+    await sleep(150, opts.signal);
+    yield {
+      content: last.includes('3 个')
+        ? '1. 我去茶馆打听沈怀瑾的消息\n2. 我仔细检查码头附近有没有可疑的痕迹\n3. 我询问船夫为什么不能去井边'
+        : '（模拟规则助手）检定就是掷 1d100，结果小于等于技能值就算成功。数字越小越好！',
+    };
     return;
   }
 

@@ -3,12 +3,22 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import express, { type NextFunction, type Request, type Response } from 'express';
-import type { AppSettings, Participant, Room, RoomEvent, RoomSettings } from '../shared/types.ts';
+import { OCCUPATIONS, quickInvestigator, type InvestigatorSheet, type TrpgState } from '../shared/coc.ts';
+import type {
+  AppSettings,
+  Participant,
+  Room,
+  RoomEvent,
+  RoomSettings,
+  TrpgCreateOptions,
+} from '../shared/types.ts';
 import { DEFAULT_ROOM_SETTINGS } from '../shared/types.ts';
-import { listModels } from './llm.ts';
+import { completeChat, listModels } from './llm.ts';
 import { BUILTIN_TEMPLATES, ROOM_PRESETS } from './presets.ts';
 import { RunnerManager } from './runner.ts';
-import { newId, Store } from './store.ts';
+import { BAISHUI, customScenario, improvScenario } from './scenarios.ts';
+import { newId, normalizeRoom, Store } from './store.ts';
+import { buildAssistantMessages, kpOf, parseSuggestions } from './trpg.ts';
 
 try {
   process.loadEnvFile();
@@ -75,10 +85,12 @@ function makeParticipant(input: Partial<Participant>, room?: Room): Participant 
     avatar: input.avatar || '🤖',
     color,
     model: input.model ?? store.getSettings().defaultModel,
+    reasoningEffort: input.reasoningEffort ?? '',
     bio: input.bio ?? '',
     persona: input.persona ?? '',
     temperature: typeof input.temperature === 'number' ? input.temperature : 0.8,
     enabled: input.enabled ?? true,
+    ...(input.role ? { role: input.role } : {}),
   };
 }
 
@@ -96,6 +108,7 @@ function cleanSettings(input: Partial<RoomSettings>): Partial<RoomSettings> {
   if (input.replyLength && ['short', 'medium', 'long'].includes(input.replyLength)) out.replyLength = input.replyLength;
   if (typeof input.replyOnHumanMessage === 'boolean') out.replyOnHumanMessage = input.replyOnHumanMessage;
   if (typeof input.turnDelayMs === 'number') out.turnDelayMs = Math.min(60000, Math.max(0, input.turnDelayMs));
+  if (input.promptMode && ['standard', 'humanlike'].includes(input.promptMode)) out.promptMode = input.promptMode;
   return out;
 }
 
@@ -172,14 +185,112 @@ app.get(
   h(() => store.listRooms()),
 );
 
+const TEAMMATE_AVATARS = ['🧭', '📷', '🩺', '🗝️'];
+const TEAMMATE_PERSONAS = [
+  '性格谨慎细心，喜欢先观察再行动，说话不多但很靠谱。',
+  '性格开朗大胆，好奇心强，有点冒失，喜欢开玩笑缓解紧张。',
+  '性格冷静理性，凡事讲证据，遇到怪事会先想科学的解释。',
+];
+
+function createTrpgRoom(o: TrpgCreateOptions): Room {
+  const era = o.era === 'modern' ? 'modern' : '1920s';
+  const scenario =
+    o.scenarioId === 'improv'
+      ? improvScenario(o.theme ?? '', era)
+      : o.scenarioId === 'custom'
+        ? customScenario(o.customScript ?? '', era)
+        : BAISHUI;
+  const now = Date.now();
+  const room: Room = {
+    id: newId(),
+    mode: 'trpg',
+    title: scenario.title,
+    scenario: scenario.intro,
+    participants: [],
+    messages: [],
+    settings: {
+      ...DEFAULT_ROOM_SETTINGS,
+      humanName: (o.humanName || '我').trim(),
+      humanRole: 'participant',
+      turnMode: 'manual',
+      autoPauseAfter: 0,
+      replyLength: 'medium',
+    },
+    createdAt: now,
+    updatedAt: now,
+  };
+  const kpModel = o.kpModel || store.getSettings().defaultModel;
+  room.participants.push(
+    makeParticipant(
+      {
+        name: '守秘人',
+        avatar: '🕯️',
+        color: '#a78bfa',
+        model: kpModel,
+        reasoningEffort: o.kpEffort ?? '',
+        bio: '主持游戏、扮演所有 NPC 的守秘人（KP）',
+        persona: '',
+        temperature: 0.9,
+        role: 'kp',
+      },
+      room,
+    ),
+  );
+  const trpg: TrpgState = {
+    scenarioId: scenario.id,
+    scenarioTitle: scenario.title,
+    scenarioIntro: scenario.intro,
+    scenarioSecret: scenario.secret,
+    era: scenario.era,
+    teachingMode: o.teachingMode ?? true,
+    autoRoll: o.autoRoll ?? false,
+    teammatesAct: true,
+    sheets: {},
+    started: false,
+    assistantLog: [],
+  };
+  const count = Math.max(0, Math.min(3, Math.floor(o.teammateCount ?? 0)));
+  const occupations = [...OCCUPATIONS].sort(() => Math.random() - 0.5);
+  const usedNames = new Set<string>();
+  for (let i = 0; i < count; i++) {
+    let sheet = quickInvestigator({ occupationId: occupations[i].id, era: scenario.era });
+    for (let tries = 0; usedNames.has(sheet.name) && tries < 10; tries++) {
+      sheet = quickInvestigator({ occupationId: occupations[i].id, era: scenario.era });
+    }
+    usedNames.add(sheet.name);
+    const p = makeParticipant(
+      {
+        name: sheet.name,
+        avatar: TEAMMATE_AVATARS[i % TEAMMATE_AVATARS.length],
+        model: o.teammateModel || kpModel,
+        bio: `AI 队友 · ${sheet.occupation}`,
+        persona: TEAMMATE_PERSONAS[i % TEAMMATE_PERSONAS.length],
+        temperature: 0.9,
+        role: 'player',
+      },
+      room,
+    );
+    room.participants.push(p);
+    trpg.sheets[p.id] = sheet;
+  }
+  room.trpg = trpg;
+  return room;
+}
+
 app.post(
   '/api/rooms',
   h((req) => {
     const b = req.body ?? {};
+    if (b.mode === 'trpg') {
+      const room = createTrpgRoom(b.trpg ?? {});
+      store.addRoom(room);
+      return room;
+    }
     const preset = ROOM_PRESETS.find((p) => p.id === b.presetId) ?? ROOM_PRESETS.find((p) => p.id === 'blank')!;
     const now = Date.now();
     const room: Room = {
       id: newId(),
+      mode: 'chat',
       title: String(b.title || preset.title).trim(),
       scenario: typeof b.scenario === 'string' ? b.scenario : preset.scenario,
       participants: [],
@@ -193,6 +304,43 @@ app.post(
       const t = templates.find((x) => x.id === tid);
       if (t) room.participants.push(makeParticipant({ ...t, model: b.model || undefined }, room));
     }
+    for (const inline of preset.participants ?? []) {
+      room.participants.push(makeParticipant({ ...inline, model: b.model || undefined }, room));
+    }
+    store.addRoom(room);
+    return room;
+  }),
+);
+
+/** 导入导出的房间 JSON（换上新的 id，避免和现有房间冲突） */
+app.post(
+  '/api/rooms/import',
+  h((req) => {
+    const input = req.body?.room ?? req.body;
+    if (!input || typeof input !== 'object' || !Array.isArray(input.participants) || !Array.isArray(input.messages)) {
+      throw new HttpError(400, '不是有效的房间文件');
+    }
+    const room = normalizeRoom(structuredClone(input) as Room);
+    const idMap = new Map<string, string>();
+    for (const p of room.participants) {
+      const id = newId();
+      idMap.set(p.id, id);
+      p.id = id;
+    }
+    for (const m of room.messages) {
+      m.id = newId();
+      if (m.participantId) m.participantId = idMap.get(m.participantId) ?? m.participantId;
+      if (m.roll?.actor && idMap.has(m.roll.actor)) m.roll.actor = idMap.get(m.roll.actor)!;
+    }
+    if (room.trpg) {
+      const sheets: Record<string, InvestigatorSheet> = {};
+      for (const [key, sheet] of Object.entries(room.trpg.sheets)) sheets[idMap.get(key) ?? key] = sheet;
+      room.trpg.sheets = sheets;
+    }
+    room.id = newId();
+    room.title = String(room.title || '导入的房间');
+    room.createdAt = room.createdAt || Date.now();
+    room.updatedAt = Date.now();
     store.addRoom(room);
     return room;
   }),
@@ -251,7 +399,7 @@ app.patch(
     if (!p) throw new HttpError(404, '角色不存在');
     const b = req.body ?? {};
     if (typeof b.name === 'string' && b.name.trim()) p.name = b.name.trim();
-    for (const key of ['avatar', 'color', 'model', 'bio', 'persona'] as const) {
+    for (const key of ['avatar', 'color', 'model', 'reasoningEffort', 'bio', 'persona'] as const) {
       if (typeof b[key] === 'string') p[key] = b[key];
     }
     if (typeof b.temperature === 'number') p.temperature = Math.min(2, Math.max(0, b.temperature));
@@ -305,7 +453,7 @@ app.post(
   runnerAction((req, id) => {
     const content = String(req.body?.content ?? '').trim();
     if (!content) throw new HttpError(400, '消息不能为空');
-    return runners.get(id).addHumanMessage(content, { interrupt: !!req.body?.interrupt });
+    return runners.get(id).addHumanMessage(content, { interrupt: !!req.body?.interrupt, ooc: !!req.body?.ooc });
   }),
 );
 app.patch(
@@ -321,6 +469,101 @@ app.post(
   runnerAction((req, id) => runners.get(id).regenerate(param(req, 'mid'))),
 );
 app.post('/api/rooms/:id/clear', runnerAction((_req, id) => runners.get(id).clearMessages()));
+
+// ---------------- 跑团 ----------------
+
+function getTrpgRoom(id: string) {
+  const room = getRoom(id);
+  if (!room.trpg) throw new HttpError(400, '这不是跑团房间');
+  return room as Room & { trpg: TrpgState };
+}
+
+function validSheet(x: any): x is InvestigatorSheet {
+  return (
+    x &&
+    typeof x.name === 'string' &&
+    x.characteristics &&
+    typeof x.skills === 'object' &&
+    x.hp &&
+    x.mp &&
+    x.san &&
+    Array.isArray(x.items)
+  );
+}
+
+app.put(
+  '/api/rooms/:id/trpg/sheets/:key',
+  runnerAction((req, id) => {
+    getTrpgRoom(id);
+    const sheet = req.body?.sheet;
+    if (!validSheet(sheet)) throw new HttpError(400, '角色卡数据不完整');
+    runners.get(id).setSheet(param(req, 'key'), sheet);
+    return { ok: true };
+  }),
+);
+
+app.patch(
+  '/api/rooms/:id/trpg',
+  h((req) => {
+    const room = getTrpgRoom(param(req, 'id'));
+    const b = req.body ?? {};
+    for (const key of ['teachingMode', 'autoRoll', 'teammatesAct'] as const) {
+      if (typeof b[key] === 'boolean') room.trpg[key] = b[key];
+    }
+    store.touchRoom(room.id, { immediate: true });
+    runners.get(room.id).emitRoomMeta();
+    return { ok: true };
+  }),
+);
+
+app.post('/api/rooms/:id/trpg/start', runnerAction((_req, id) => runners.get(id).startTrpg()));
+app.post('/api/rooms/:id/rolls/:mid/roll', runnerAction((req, id) => runners.get(id).resolveRoll(param(req, 'mid'))));
+app.post('/api/rooms/:id/rolls/:mid/push', runnerAction((req, id) => runners.get(id).pushRoll(param(req, 'mid'))));
+
+app.post(
+  '/api/rooms/:id/assistant',
+  h(async (req) => {
+    const room = getTrpgRoom(param(req, 'id'));
+    const mode = req.body?.mode === 'suggest' ? 'suggest' : 'ask';
+    const question = String(req.body?.question ?? '').trim();
+    if (mode === 'ask' && !question) throw new HttpError(400, '问题不能为空');
+    const settings = store.getSettings();
+    const kp = kpOf(room);
+    const model = kp?.model || settings.defaultModel;
+    if (!model) throw new HttpError(400, '还没有可用的模型，请先在设置里选择默认模型');
+    let answer: string;
+    try {
+      answer = await completeChat({
+        baseUrl: settings.baseUrl,
+        apiKey: settings.apiKey,
+        model,
+        temperature: 0.6,
+        messages: buildAssistantMessages(room, question, mode),
+        signal: AbortSignal.timeout(120000),
+      });
+    } catch (err) {
+      throw new HttpError(502, err instanceof Error ? err.message : String(err));
+    }
+    answer = answer.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+    if (mode === 'suggest') return { suggestions: parseSuggestions(answer) };
+    const now = Date.now();
+    room.trpg.assistantLog.push({ role: 'user', content: question, at: now }, { role: 'assistant', content: answer, at: Date.now() });
+    room.trpg.assistantLog = room.trpg.assistantLog.slice(-60);
+    store.touchRoom(room.id, { immediate: true });
+    runners.get(room.id).emitRoomMeta();
+    return { answer };
+  }),
+);
+
+app.delete(
+  '/api/rooms/:id/assistant',
+  h((req) => {
+    const room = getTrpgRoom(param(req, 'id'));
+    room.trpg.assistantLog = [];
+    store.touchRoom(room.id, { immediate: true });
+    runners.get(room.id).emitRoomMeta();
+  }),
+);
 
 // ---------------- 实时事件（SSE） ----------------
 

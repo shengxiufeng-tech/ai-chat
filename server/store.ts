@@ -8,6 +8,23 @@ import { DEFAULT_ROOM_SETTINGS } from '../shared/types.ts';
 
 export const newId = () => randomUUID().replace(/-/g, '').slice(0, 12);
 
+/** 补全旧版本数据里没有的字段 */
+export function normalizeRoom(room: Room): Room {
+  room.mode = room.mode ?? 'chat';
+  room.settings = { ...DEFAULT_ROOM_SETTINGS, ...room.settings };
+  room.participants = (room.participants ?? []).map((p) => ({ ...p, reasoningEffort: p.reasoningEffort ?? '' }));
+  room.messages = room.messages ?? [];
+  // 上次关闭时还在生成的消息，标记为被打断
+  for (const m of room.messages) {
+    if (m.status === 'streaming') m.status = 'interrupted';
+  }
+  if (room.trpg) {
+    room.trpg.assistantLog = room.trpg.assistantLog ?? [];
+    room.trpg.sheets = room.trpg.sheets ?? {};
+  }
+  return room;
+}
+
 export class Store {
   private roomsDir: string;
   private rooms = new Map<string, Room>();
@@ -19,12 +36,7 @@ export class Store {
     for (const file of fs.readdirSync(this.roomsDir)) {
       if (!file.endsWith('.json')) continue;
       try {
-        const room = JSON.parse(fs.readFileSync(path.join(this.roomsDir, file), 'utf8')) as Room;
-        room.settings = { ...DEFAULT_ROOM_SETTINGS, ...room.settings };
-        // 上次关闭时还在生成的消息，标记为被打断
-        for (const m of room.messages) {
-          if (m.status === 'streaming') m.status = 'interrupted';
-        }
+        const room = normalizeRoom(JSON.parse(fs.readFileSync(path.join(this.roomsDir, file), 'utf8')));
         this.rooms.set(room.id, room);
       } catch (err) {
         console.error(`读取房间文件失败 ${file}:`, err);
@@ -93,7 +105,9 @@ export class Store {
     return [...this.rooms.values()]
       .map((r) => ({
         id: r.id,
+        mode: r.mode,
         title: r.title,
+        avatars: r.participants.slice(0, 4).map((p) => p.avatar),
         participantCount: r.participants.length,
         messageCount: r.messages.length,
         updatedAt: r.updatedAt,

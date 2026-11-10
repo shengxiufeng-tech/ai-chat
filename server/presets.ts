@@ -166,6 +166,19 @@ export const ROOM_PRESETS: RoomPreset[] = [
     templateIds: ['pm', 'engineer', 'designer'],
   },
   {
+    id: 'humanlike',
+    name: '拟人对话',
+    description: '只告诉 AI「你是真人，在和另一个真人聊天」，没有任何其他设定',
+    title: '拟人对话',
+    scenario: '',
+    templateIds: [],
+    participants: [
+      { name: '甲', avatar: '🙂', color: '#38bdf8', bio: '', persona: '', temperature: 1 },
+      { name: '乙', avatar: '🙃', color: '#f472b6', bio: '', persona: '', temperature: 1 },
+    ],
+    settings: { promptMode: 'humanlike', humanRole: 'participant', turnMode: 'round_robin' },
+  },
+  {
     id: 'blank',
     name: '空白房间',
     description: '从零开始，自己添加角色',

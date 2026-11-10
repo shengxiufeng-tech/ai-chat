@@ -36,3 +36,6 @@ export function useModels() {
   }, []);
   return s;
 }
+
+/** 模型 id 太长时只显示 provider/ 之后的部分 */
+export const shortModel = (id?: string) => (id ? (id.includes('/') ? id.slice(id.indexOf('/') + 1) : id) : '未选择模型');

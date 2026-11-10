@@ -1,5 +1,6 @@
 // 右下角的提示消息
 
+import { AlertCircle, Info } from 'lucide-react';
 import { useEffect, useState } from 'react';
 
 type Toast = { id: number; text: string; level: 'info' | 'error' };
@@ -42,10 +43,11 @@ export function Toaster() {
     };
   }, []);
   return (
-    <div className="toaster">
+    <div className="toaster" role="status">
       {list.map((t) => (
         <div key={t.id} className={`toast toast-${t.level}`}>
-          {t.text}
+          {t.level === 'error' ? <AlertCircle /> : <Info />}
+          <span>{t.text}</span>
         </div>
       ))}
     </div>

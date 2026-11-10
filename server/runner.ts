@@ -1,7 +1,19 @@
 // 对话调度：决定谁发言、调用模型、处理插话 / 暂停 / 打断
 
+import type { InvestigatorSheet } from '../shared/coc.ts';
 import type { Message, Participant, Room, RoomEvent, RunnerState, RunStatus } from '../shared/types.ts';
 import { completeChat, streamChat } from './llm.ts';
+import {
+  buildKpMessages,
+  buildTeammateMessages,
+  kpOf,
+  processKpCommands,
+  resolveCheck,
+  resolveSan,
+  rollMessage,
+  rollText,
+  teammatesOf,
+} from './trpg.ts';
 import {
   buildAgentMessages,
   buildModeratorMessages,
@@ -30,6 +42,10 @@ export class RoomRunner {
   /** 每次暂停 / 停止都会加一，用来作废暂停前已经开始挑人的请求 */
   private epoch = 0;
   private listeners = new Set<Listener>();
+  /** 跑团：本轮（自玩家上次行动以来）AI 队友是否已经行动过 */
+  private teammatesActed = false;
+  /** 跑团：守秘人因为自动掷骰连续接着说的次数 */
+  private kpChain = 0;
 
   constructor(
     private roomId: string,
@@ -78,10 +94,19 @@ export class RoomRunner {
     this.emit({ type: 'notice', level, text });
   }
 
+  /** 推送房间信息（不含消息），角色卡变化时用 */
+  emitRoomMeta() {
+    const { messages: _messages, ...meta } = this.room;
+    this.emit({ type: 'room', room: meta });
+  }
+
   // ---------- 对外操作 ----------
 
   /** 开始 / 继续自动对话 */
   run() {
+    if (this.room.mode === 'trpg') {
+      throw new Error('跑团模式由你的行动推动：描述你要做什么，守秘人就会回应');
+    }
     if (this.room.settings.turnMode === 'manual') {
       throw new Error('当前是「手动点名」模式，请点角色旁边的「发言」按钮');
     }
@@ -123,7 +148,7 @@ export class RoomRunner {
   }
 
   /** 人类发言 */
-  addHumanMessage(content: string, { interrupt = false } = {}) {
+  addHumanMessage(content: string, { interrupt = false, ooc = false } = {}) {
     const room = this.room;
     if (interrupt) this.current?.controller.abort();
     const message: Message = {
@@ -134,10 +159,27 @@ export class RoomRunner {
       status: 'done',
       createdAt: Date.now(),
     };
+    if (room.mode === 'trpg' && ooc) message.ooc = true;
     room.messages.push(message);
     this.store.touchRoom(room.id, { immediate: true });
     this.emit({ type: 'message_added', message });
     this.aiTurnsSinceHuman = 0;
+
+    if (room.mode === 'trpg') {
+      this.kpChain = 0;
+      this.teammatesActed = false;
+      const kp = kpOf(room);
+      const mentioned = pickByMention(room);
+      if (!ooc && mentioned && mentioned.role === 'player') {
+        // 点名 AI 队友：先让队友回应，再由守秘人描述结果
+        this.queue.push({ participantId: mentioned.id });
+        this.teammatesActed = true;
+      }
+      if (kp) this.queue.push({ participantId: kp.id });
+      this.kick();
+      this.emitState();
+      return message;
+    }
 
     // 自动对话进行中：循环会自然接上（@ 到的人优先）
     // 暂停中：按设置让一位 AI 接话
@@ -192,10 +234,149 @@ export class RoomRunner {
     this.requestTurn(participantId);
   }
 
+  // ---------- 跑团 ----------
+
+  private get trpg() {
+    const trpg = this.room.trpg;
+    if (!trpg) throw new Error('这不是跑团房间');
+    return trpg;
+  }
+
+  /** 守秘人开场 */
+  startTrpg() {
+    const trpg = this.trpg;
+    if (!trpg.sheets.player) throw new Error('请先创建你的调查员');
+    const kp = kpOf(this.room);
+    if (!kp) throw new Error('房间里没有守秘人');
+    trpg.started = true;
+    this.teammatesActed = false;
+    this.kpChain = 0;
+    this.store.touchRoom(this.roomId, { immediate: true });
+    this.emitRoomMeta();
+    this.requestTurn(kp.id);
+  }
+
+  setSheet(key: string, sheet: InvestigatorSheet) {
+    const trpg = this.trpg;
+    if (key !== 'player' && !teammatesOf(this.room).some((p) => p.id === key)) {
+      throw new Error('找不到这个调查员');
+    }
+    trpg.sheets[key] = sheet;
+    if (key !== 'player') {
+      const p = this.room.participants.find((x) => x.id === key);
+      if (p) p.name = sheet.name;
+    }
+    this.store.touchRoom(this.roomId, { immediate: true });
+    this.emitRoomMeta();
+  }
+
+  private findRoll(messageId: string) {
+    const m = this.room.messages.find((x) => x.id === messageId);
+    if (!m || m.kind !== 'roll' || !m.roll) throw new Error('找不到这次掷骰');
+    return m as Message & { roll: NonNullable<Message['roll']> };
+  }
+
+  /** 玩家点击掷骰 */
+  resolveRoll(messageId: string) {
+    const trpg = this.trpg;
+    const m = this.findRoll(messageId);
+    const r = m.roll;
+    if (!r.pending) throw new Error('这次已经掷过了');
+    if (r.type === 'check') {
+      resolveCheck(r);
+    } else if (r.type === 'san') {
+      const sheet = trpg.sheets[r.actor];
+      if (!sheet) throw new Error('找不到这个调查员');
+      resolveSan(r, sheet);
+      this.emitRoomMeta();
+    }
+    m.content = rollText(r);
+    this.store.touchRoom(this.roomId, { immediate: true });
+    this.emit({ type: 'message_updated', message: m });
+    this.afterHumanRoll();
+    return m;
+  }
+
+  /** 孤注一掷：对失败的检定再骰一次 */
+  pushRoll(messageId: string) {
+    const m = this.findRoll(messageId);
+    const r = m.roll;
+    if (r.type !== 'check' || r.pending || r.success || !r.pushable || r.pushedAlready) {
+      throw new Error('这次检定不能孤注一掷');
+    }
+    r.pushedAlready = true;
+    r.pushable = false;
+    this.emit({ type: 'message_updated', message: m });
+    const push: typeof r = {
+      type: 'check',
+      actor: r.actor,
+      actorName: r.actorName,
+      pending: false,
+      label: r.label,
+      target: r.target,
+      difficulty: r.difficulty,
+      bonus: r.bonus,
+      pushed: true,
+    };
+    resolveCheck(push);
+    const msg = rollMessage(newId(), push);
+    this.room.messages.push(msg);
+    this.store.touchRoom(this.roomId, { immediate: true });
+    this.emit({ type: 'message_added', message: msg });
+    this.afterHumanRoll();
+    return msg;
+  }
+
+  private afterHumanRoll() {
+    const room = this.room;
+    const stillPending = room.messages.some((m) => m.roll?.pending && m.roll.actor === 'player');
+    const kp = kpOf(room);
+    if (!stillPending && kp) {
+      this.kpChain = 0;
+      this.aiTurnsSinceHuman = 0;
+      this.queue.push({ participantId: kp.id });
+      this.kick();
+    }
+  }
+
+  /** 守秘人说完后：处理骰子指令，安排接下来谁说话 */
+  private afterKpTurn(message: Message) {
+    const room = this.room;
+    const res = processKpCommands(room, message.content);
+    for (const problem of res.problems) this.notice(problem, 'error');
+    for (const roll of res.rolls) {
+      const msg = rollMessage(newId(), roll);
+      room.messages.push(msg);
+      this.emit({ type: 'message_added', message: msg });
+    }
+    if (res.sheetsChanged) this.emitRoomMeta();
+    this.store.touchRoom(room.id, { immediate: true });
+
+    if (res.pendingHuman > 0) return; // 等玩家掷骰
+    const kp = kpOf(room);
+    if (res.needContinue && kp) {
+      if (this.kpChain < 3) {
+        this.kpChain++;
+        this.queue.push({ participantId: kp.id });
+      } else {
+        this.notice('守秘人连续掷骰太多次，先停下来等你行动。');
+      }
+      return;
+    }
+    if (room.trpg?.teammatesAct && !this.teammatesActed) {
+      this.teammatesActed = true;
+      for (const p of teammatesOf(room)) if (p.enabled) this.queue.push({ participantId: p.id });
+    }
+  }
+
   clearMessages() {
     this.stop();
     this.room.messages = [];
     this.aiTurnsSinceHuman = 0;
+    if (this.room.trpg) {
+      this.room.trpg.started = false;
+      this.emitRoomMeta();
+    }
     this.store.touchRoom(this.roomId, { immediate: true });
     this.emit({ type: 'messages_cleared' });
     this.emitState();
@@ -234,7 +415,11 @@ export class RoomRunner {
           continue;
         }
 
-        const ok = await this.generateTurn(speaker);
+        const { ok, message } = await this.generateTurn(speaker);
+        if (ok && message?.status === 'done' && this.room.mode === 'trpg' && speaker.role === 'kp') {
+          this.afterKpTurn(message);
+        }
+        if (!ok && this.room.mode === 'trpg') this.queue = [];
         if (!ok && this.status === 'running') {
           this.status = 'paused';
           this.notice('出错了，自动对话已暂停。处理好之后可以点「继续」。', 'error');
@@ -284,6 +469,7 @@ export class RoomRunner {
 
   private async pickNext(): Promise<Participant | undefined> {
     const room = this.room;
+    if (room.mode === 'trpg') return kpOf(room);
     const mentioned = pickByMention(room);
     if (mentioned) return mentioned;
 
@@ -324,8 +510,16 @@ export class RoomRunner {
     return pickRoundRobin(room);
   }
 
+  private buildMessages(room: Room, p: Participant, history: Message[]) {
+    if (room.mode === 'trpg' && room.trpg) {
+      if (p.role === 'kp') return buildKpMessages(room, p, history);
+      if (p.role === 'player') return buildTeammateMessages(room, p, history);
+    }
+    return buildAgentMessages(room, p, history);
+  }
+
   /** 生成一次发言，返回是否成功（被打断也算成功） */
-  private async generateTurn(p: Participant): Promise<boolean> {
+  private async generateTurn(p: Participant): Promise<{ ok: boolean; message?: Message }> {
     const room = this.room;
     const settings = this.store.getSettings();
     const model = p.model || settings.defaultModel;
@@ -339,6 +533,7 @@ export class RoomRunner {
       avatar: p.avatar,
       color: p.color,
       model,
+      reasoningEffort: p.reasoningEffort || undefined,
       content: '',
       reasoning: '',
       status: 'streaming',
@@ -351,7 +546,7 @@ export class RoomRunner {
       room.messages.push(message);
       this.store.touchRoom(room.id, { immediate: true });
       this.emit({ type: 'message_added', message });
-      return false;
+      return { ok: false, message };
     }
 
     room.messages.push(message);
@@ -367,7 +562,8 @@ export class RoomRunner {
         apiKey: settings.apiKey,
         model,
         temperature: p.temperature,
-        messages: buildAgentMessages(room, p, history),
+        reasoningEffort: p.reasoningEffort || undefined,
+        messages: this.buildMessages(room, p, history),
         signal: controller.signal,
       });
       for await (const chunk of stream) {
@@ -414,7 +610,7 @@ export class RoomRunner {
     }
     this.store.touchRoom(room.id, { immediate: true });
     this.emitState();
-    return ok;
+    return { ok, message: stillThere ? message : undefined };
   }
 }
 

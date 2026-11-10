@@ -1,0 +1,69 @@
+import { BookOpen, Dices, Play, UserRound, Wand2 } from 'lucide-react';
+import { useState } from 'react';
+import { quickInvestigator } from '../../../shared/coc';
+import type { Room } from '../../../shared/types';
+import { post, put } from '../api';
+import { attempt } from '../toast';
+
+/** 跑团开场前的引导卡片：创建调查员 → 开始游戏 */
+export function TrpgSetup({ room, onCreate }: { room: Room; onCreate: () => void }) {
+  const trpg = room.trpg!;
+  const sheet = trpg.sheets.player;
+  const [starting, setStarting] = useState(false);
+  const teammates = room.participants.filter((p) => p.role === 'player');
+
+  const quick = () =>
+    attempt(() =>
+      put(`/rooms/${room.id}/trpg/sheets/player`, {
+        sheet: quickInvestigator({ occupationId: 'journalist', era: trpg.era, name: room.settings.humanName === '我' ? undefined : room.settings.humanName }),
+      }),
+    );
+
+  const start = async () => {
+    setStarting(true);
+    await attempt(() => post(`/rooms/${room.id}/trpg/start`));
+    setStarting(false);
+  };
+
+  return (
+    <div className="setup-card">
+      <h2>
+        <BookOpen style={{ width: 20, height: 20, color: '#a78bfa' }} /> {trpg.scenarioTitle}
+      </h2>
+      <div className="scenario-intro">{trpg.scenarioIntro}</div>
+      <p className="hint" style={{ fontSize: 13 }}>
+        <b style={{ color: 'var(--text)' }}>跑团怎么玩？</b> 守秘人（AI）描述场景、扮演故事里的所有人物；你决定你的调查员做什么、说什么。
+        结果不确定的时候掷骰子决定成败。不懂的随时问右侧的「规则助手」。
+        {teammates.length > 0 && ` 这次还有 ${teammates.map((p) => p.name).join('、')} 作为 AI 队友陪你一起调查。`}
+      </p>
+      <div className="setup-steps">
+        <div className={`setup-step ${sheet ? 'done' : 'current'}`}>
+          <span className="num">1</span>
+          {sheet ? `调查员：${sheet.name}（${sheet.occupation}）` : '创建你的调查员'}
+        </div>
+        <div className={`setup-step ${sheet ? 'current' : ''}`}>
+          <span className="num">2</span>开始游戏，守秘人开场
+        </div>
+      </div>
+      {!sheet ? (
+        <div className="row wrap">
+          <button className="btn btn-primary btn-lg" onClick={onCreate}>
+            <UserRound /> 一步步创建调查员
+          </button>
+          <button className="btn btn-lg" onClick={quick} title="随机生成一位记者调查员，之后可以在右侧修改">
+            <Wand2 /> 直接随机一个
+          </button>
+        </div>
+      ) : (
+        <div className="row wrap">
+          <button className="btn btn-primary btn-lg" onClick={start} disabled={starting}>
+            <Play /> 开始游戏
+          </button>
+          <button className="btn btn-lg" onClick={onCreate}>
+            <Dices /> 重新创建调查员
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}

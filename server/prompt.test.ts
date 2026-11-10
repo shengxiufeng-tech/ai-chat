@@ -21,8 +21,9 @@ const p = (id: string, name: string, extra: Partial<Participant> = {}): Particip
   persona: '',
   temperature: 0.8,
   enabled: true,
+  reasoningEffort: '',
   ...extra,
-});
+} as Participant);
 
 let seq = 0;
 const ai = (who: Participant, content: string, extra: Partial<Message> = {}): Message => ({
@@ -50,6 +51,7 @@ const C = p('c', '马克');
 
 const makeRoom = (messages: Message[], participants = [A, B, C]): Room => ({
   id: 'r',
+  mode: 'chat',
   title: 't',
   scenario: '讨论 AI',
   participants,
