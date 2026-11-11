@@ -99,8 +99,6 @@ export interface Message {
   trimmed?: number;
   /** 模型替别人写的发言，已经从正文里去掉（保留在这里供查看） */
   filtered?: string;
-  /** 这次请求的 token 用量（服务商报告了才有） */
-  usage?: TokenUsage;
 }
 
 export interface Room {

@@ -152,8 +152,11 @@ app.post(
     const s = store.getSettings();
     const model = String(req.body?.model || s.defaultModel || '').trim();
     if (!model) throw new HttpError(400, '请先选择要测试的模型');
-    // 一段足够长、内容固定的提示（约 5 千 token）：Gemini 等服务要求前缀至少 1~4 千 token 才会缓存
-    const system = `你是缓存测试助手。下面是一段固定的参考资料，请忽略它的内容，只按用户要求回复。\n\n${BAISHUI.secret}\n\n${BAISHUI.secret}`;
+    // 内容固定的长提示。Gemini 的自动缓存要求提示至少 1~4 千 token（因模型而异），「长」档约 9 千 token
+    const long = req.body?.size === 'long';
+    const system = `你是缓存测试助手。下面是一段固定的参考资料，请忽略它的内容，只按用户要求回复。\n\n${Array(long ? 6 : 2)
+      .fill(BAISHUI.secret)
+      .join('\n\n')}`;
     const messages: ChatMessage[] = [
       { role: 'system', content: system },
       { role: 'user', content: '这是一条缓存测试消息，请只回复一个字：好' },
@@ -180,7 +183,7 @@ app.post(
     // 等几秒：有的服务（比如 DeepSeek）在请求结束后才把缓存建好
     await new Promise((r) => setTimeout(r, 3000));
     const second = await run();
-    return { model, first, second, promptTokens: estimateTokens(system) };
+    return { model, first, second, promptTokens: estimateTokens(system), size: long ? 'long' : 'standard' };
   }),
 );
 

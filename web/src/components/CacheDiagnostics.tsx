@@ -2,9 +2,9 @@ import { AlertCircle, CheckCircle2, ClipboardCopy, Info, Loader2, Zap } from 'lu
 import { useState } from 'react';
 import type { TokenUsage } from '../../../shared/types';
 import { post } from '../api';
-import { toast } from '../toast';
+import { copyText } from '../clipboard';
 import { ModelInput } from './ModelInput';
-import { Field } from './ui';
+import { Field, Segmented } from './ui';
 
 interface Attempt {
   ok: boolean;
@@ -18,6 +18,7 @@ interface Result {
   first: Attempt;
   second: Attempt | null;
   promptTokens?: number;
+  size?: 'standard' | 'long';
 }
 
 function describe(a: Attempt | null) {
@@ -51,15 +52,22 @@ function verdict(r: Result): { level: 'ok' | 'error' | 'info'; text: string } {
       text: `缓存正常：第二次请求有 ${Math.round((u.cached / Math.max(1, u.input)) * 100)}% 的输入命中了缓存。如果实际对话里还是 0，把消息旁边的「缓存」标签和这段结果一起发给我。`,
     };
   }
+  if (r.size !== 'long') {
+    return {
+      level: 'error',
+      text: '两次完全相同的请求，第二次也没有命中缓存。有的服务（比如 Gemini）要求提示足够长才会自动缓存，请把「提示长度」改成「长」再测一次。',
+    };
+  }
   return {
     level: 'error',
-    text: '两次完全相同的请求，第二次也没有命中缓存。可能是：这个服务商 / 账号不支持自动缓存；Magpie 把两次请求分给了不同的账号；或者服务商要求更长的提示才会缓存。把这段结果复制给我，我来进一步排查。',
+    text: '提示已经超过 8 千 token，两次完全相同的请求仍然没有命中缓存：这个渠道很可能不支持自动缓存，或者不报告缓存命中（比如 Antigravity 走的是 Google Code Assist，不是普通的 Gemini API）。这不是对话内容的问题，应用这边没法改变。',
   };
 }
 
 /** 缓存诊断：用同一个会话连续发两次相同的长提示，看第二次有没有命中缓存 */
 export function CacheDiagnostics({ defaultModel }: { defaultModel: string }) {
   const [model, setModel] = useState(defaultModel);
+  const [size, setSize] = useState<'standard' | 'long'>('standard');
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<Result | null>(null);
   const [error, setError] = useState('');
@@ -69,7 +77,7 @@ export function CacheDiagnostics({ defaultModel }: { defaultModel: string }) {
     setResult(null);
     setError('');
     try {
-      setResult(await post<Result>('/diagnostics/cache', { model }));
+      setResult(await post<Result>('/diagnostics/cache', { model, size }));
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -80,7 +88,7 @@ export function CacheDiagnostics({ defaultModel }: { defaultModel: string }) {
   const v = result && verdict(result);
   const summary = result
     ? [
-        `缓存诊断 · 模型 ${result.model}${result.promptTokens ? ` · 提示约 ${result.promptTokens.toLocaleString('en-US')} tokens` : ''}`,
+        `缓存诊断 · 模型 ${result.model} · ${result.size === 'long' ? '长提示' : '标准提示'}${result.promptTokens ? `（约 ${result.promptTokens.toLocaleString('en-US')} tokens）` : ''}`,
         `第 1 次：${describe(result.first)}`,
         `第 2 次：${describe(result.second)}`,
         `结论：${v?.text ?? ''}`,
@@ -88,7 +96,19 @@ export function CacheDiagnostics({ defaultModel }: { defaultModel: string }) {
     : '';
 
   return (
-    <Field label="缓存诊断" hint="（用同一个会话连续发两次相同的长提示，看第二次有没有命中缓存；大约消耗 1 万输入 token）">
+    <Field label="缓存诊断" hint="（用同一个会话连续发两次相同的长提示，看第二次有没有命中缓存）">
+      <div className="row">
+        <span className="hint">提示长度</span>
+        <Segmented
+          size="sm"
+          value={size}
+          onChange={setSize}
+          options={[
+            { value: 'standard', label: '标准（约 3k）', title: '约 3 千 token，两次共消耗约 6 千输入 token' },
+            { value: 'long', label: '长（约 9k）', title: '约 9 千 token，用来测试 Gemini 这类要求更长提示才缓存的服务；两次共消耗约 2 万输入 token' },
+          ]}
+        />
+      </div>
       <div className="row" style={{ alignItems: 'flex-start' }}>
         <div className="grow">
           <ModelInput value={model} onChange={setModel} showStatus={false} placeholder="要测试的模型" />
@@ -120,10 +140,7 @@ export function CacheDiagnostics({ defaultModel }: { defaultModel: string }) {
           <button
             className="btn btn-sm"
             style={{ alignSelf: 'flex-start' }}
-            onClick={async () => {
-              await navigator.clipboard.writeText(summary);
-              toast('诊断结果已复制');
-            }}
+            onClick={() => void copyText(summary, '诊断结果已复制')}
           >
             <ClipboardCopy /> 复制结果
           </button>

@@ -15,6 +15,7 @@ import {
   toPlainText,
   type ExportOptions,
 } from '../exportDoc';
+import { copyText } from '../clipboard';
 import { shortModel } from '../models';
 import { toast } from '../toast';
 import { splitTips } from './MessageItem';
@@ -117,8 +118,7 @@ export function ExportModal({ room, onClose }: { room: Room; onClose: () => void
       label: '复制文字',
       fn: () =>
         run('复制文字', async () => {
-          await navigator.clipboard.writeText(toPlainText(room, messages, o));
-          toast('对话文字已复制');
+          await copyText(toPlainText(room, messages, o), '对话文字已复制');
         }),
     },
     {

@@ -598,7 +598,6 @@ export class RoomRunner {
         signal: controller.signal,
       });
       for await (const chunk of stream) {
-        if (chunk.usage) message.usage = chunk.usage;
         if (chunk.content) message.content += chunk.content;
         if (chunk.reasoning) message.reasoning += chunk.reasoning;
         this.emit({
