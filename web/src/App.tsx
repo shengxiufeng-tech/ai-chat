@@ -1,4 +1,4 @@
-import { Dices, FileUp, Monitor, Moon, Plus, Settings, Sparkles, Sun } from 'lucide-react';
+import { Dices, FileUp, Menu, Monitor, Moon, Plus, Settings, Sparkles, Sun } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Room, RoomMode, RoomSummary } from '../../shared/types';
 import { get, post } from './api';
@@ -17,6 +17,8 @@ export default function App() {
   const [selected, setSelected] = useState<string | null>(() => localStorage.getItem('ai-chat:room'));
   const [showSettings, setShowSettings] = useState(false);
   const [newRoom, setNewRoom] = useState<RoomMode | null>(null);
+  // 手机上左侧栏是抽屉，默认收起
+  const [navOpen, setNavOpen] = useState(false);
   const [theme, setTheme] = useTheme();
   const models = useModels();
   const fileRef = useRef<HTMLInputElement>(null);
@@ -65,6 +67,7 @@ export default function App() {
   // Ctrl/⌘ + K 聚焦搜索框
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setNavOpen(false);
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
         e.preventDefault();
         searchRef.current?.focus();
@@ -106,7 +109,8 @@ export default function App() {
   };
 
   return (
-    <div className="app">
+    <div className={`app ${navOpen ? 'nav-open' : ''}`}>
+      {navOpen && <div className="nav-backdrop" onClick={() => setNavOpen(false)} />}
       <nav className="sidebar">
         <div className="brand">
           <div className="brand-logo">
@@ -118,7 +122,13 @@ export default function App() {
           </div>
         </div>
         <div className="sidebar-actions">
-          <button className="btn btn-primary" onClick={() => setNewRoom('chat')}>
+          <button
+            className="btn btn-primary"
+            onClick={() => {
+              setNavOpen(false);
+              setNewRoom('chat');
+            }}
+          >
             <Plus /> 新建房间
           </button>
           <button className="icon-btn" title="导入房间（JSON 备份）" onClick={() => fileRef.current?.click()}>
@@ -143,7 +153,10 @@ export default function App() {
           searching={searching}
           selected={selected}
           onQuery={setQuery}
-          onSelect={setSelected}
+          onSelect={(id) => {
+            setSelected(id);
+            setNavOpen(false);
+          }}
           onChanged={() => void refresh()}
           onDeleted={onRoomDeleted}
         />
@@ -164,7 +177,13 @@ export default function App() {
               ]}
             />
             <span className="spacer" />
-            <button className="btn btn-sm btn-ghost" onClick={() => setShowSettings(true)}>
+            <button
+              className="btn btn-sm btn-ghost"
+              onClick={() => {
+                setNavOpen(false);
+                setShowSettings(true);
+              }}
+            >
               <Settings /> 设置
             </button>
           </div>
@@ -173,9 +192,18 @@ export default function App() {
 
       <main className="main">
         {selected ? (
-          <RoomView key={selected} roomId={selected} onMetaChange={refresh} onDeleted={() => onRoomDeleted(selected)} />
+          <RoomView
+            key={selected}
+            roomId={selected}
+            onMetaChange={refresh}
+            onDeleted={() => onRoomDeleted(selected)}
+            onOpenNav={() => setNavOpen(true)}
+          />
         ) : (
           <div className="welcome">
+            <button className="icon-btn mobile-only welcome-nav" onClick={() => setNavOpen(true)} aria-label="房间列表" title="房间列表">
+              <Menu />
+            </button>
             <div className="welcome-logo">
               <Sparkles />
             </div>

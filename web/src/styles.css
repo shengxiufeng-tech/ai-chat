@@ -650,6 +650,7 @@ h4 {
   display: grid;
   grid-template-columns: 252px 1fr;
   height: 100vh;
+  height: 100dvh;
   overflow: hidden;
 }
 
@@ -2597,6 +2598,7 @@ mark {
   border-radius: 18px;
   width: min(540px, 100%);
   max-height: calc(100vh - 48px);
+  max-height: calc(100dvh - 48px);
   display: flex;
   flex-direction: column;
   box-shadow: var(--shadow-lg);
@@ -3435,6 +3437,60 @@ mark {
   }
 }
 
+/* ============ 手机访问 ============ */
+
+.phone-access {
+  display: grid;
+  grid-template-columns: 148px minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.phone-qr {
+  background: #fff;
+  border-radius: 12px;
+  padding: 6px;
+  line-height: 0;
+}
+
+.phone-qr svg {
+  width: 100%;
+  height: auto;
+}
+
+.phone-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.phone-label {
+  font-size: 12px;
+  color: var(--text-3);
+  flex: none;
+  width: 3.2em;
+}
+
+.phone-value {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.phone-code {
+  font-size: 15px;
+  letter-spacing: 0.08em;
+  font-weight: 600;
+}
+
+.chip.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}
+
 /* ============ 窄屏 ============ */
 
 @media (max-width: 1100px) {
@@ -3457,24 +3513,331 @@ mark {
   }
 }
 
+/* 只在手机上显示 / 隐藏的东西 */
+.mobile-only,
+.panel-backdrop,
+.tabs .panel-close,
+.nav-backdrop {
+  display: none;
+}
+
+@media (max-width: 1100px) {
+  /* 侧栏浮在对话上方时：点旁边空白处收起，右上角有关闭按钮 */
+  .room.with-panel .panel-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 24;
+    background: rgba(5, 7, 12, 0.45);
+    animation: fade 0.15s ease-out;
+  }
+
+  .tabs .panel-close {
+    display: inline-flex;
+    margin: 0 0 6px auto;
+    align-self: center;
+    flex: none;
+  }
+}
+
+/* ============ 手机 ============ */
+
 @media (max-width: 760px) {
+  .mobile-only {
+    display: inline-flex;
+  }
+
+  .hide-mobile {
+    display: none !important;
+  }
+
   .app {
     grid-template-columns: 1fr;
   }
 
+  /* 左侧栏变成从左边滑出的抽屉 */
   .sidebar {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: min(300px, 84vw);
+    z-index: 40;
+    transform: translateX(-102%);
+    transition: transform 0.22s ease;
+    padding-top: calc(16px + env(safe-area-inset-top));
+    padding-bottom: calc(12px + env(safe-area-inset-bottom));
+    padding-left: calc(12px + env(safe-area-inset-left));
+  }
+
+  .app.nav-open .sidebar {
+    transform: none;
+    box-shadow: var(--shadow-lg);
+  }
+
+  .nav-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 39;
+    background: rgba(5, 7, 12, 0.5);
+    animation: fade 0.15s ease-out;
+  }
+
+  .room-search kbd {
     display: none;
   }
 
+  /* 顶栏：☰ 房间名 / 状态 …… 按钮 */
+  .room-header {
+    gap: 4px;
+    padding: 6px 8px;
+    padding-top: calc(6px + env(safe-area-inset-top));
+    min-height: 54px;
+  }
+
+  .room-title {
+    flex: 1;
+  }
+
+  .room-title-row {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0;
+  }
+
+  .room-title h1 {
+    font-size: 15.5px;
+    max-width: 100%;
+  }
+
+  .title-edit,
+  .room-subtitle {
+    display: none;
+  }
+
+  .room-title-input {
+    width: 100%;
+  }
+
+  .status-pill {
+    height: auto;
+    padding: 0;
+    background: none !important;
+    font-size: 11.5px;
+    gap: 5px;
+  }
+
+  .room-controls {
+    gap: 2px;
+  }
+
+  .room-controls .btn {
+    height: 34px;
+    padding: 0 11px;
+  }
+
+  .cast-bar {
+    padding: 6px 10px;
+  }
+
+  /* 消息 */
+  .messages {
+    padding: 14px 10px 8px;
+    gap: 14px;
+  }
+
+  .messages-inner {
+    gap: 14px;
+  }
+
+  .msg {
+    gap: 8px;
+  }
+
+  .msg-avatar {
+    width: 30px;
+    height: 30px;
+    border-radius: 10px;
+    font-size: 16px;
+  }
+
+  .msg-main {
+    max-width: calc(100% - 38px);
+  }
+
+  .msg-edit {
+    min-width: 0;
+    width: 100%;
+  }
+
+  /* 输入框：16px 字号避免 iPhone 聚焦时自动放大；底部留出手势条的位置 */
+  .composer {
+    padding: 6px 8px;
+    padding-bottom: calc(8px + env(safe-area-inset-bottom));
+  }
+
+  .composer-box textarea {
+    font-size: 16px;
+    max-height: 30dvh;
+  }
+
+  .composer-hint {
+    display: none;
+  }
+
+  /* 右侧栏：铺满整个屏幕 */
+  .room.with-panel .room-panel {
+    width: 100vw;
+    padding-top: env(safe-area-inset-top);
+    padding-bottom: env(safe-area-inset-bottom);
+    border-left: none;
+  }
+
+  .tabs {
+    padding: 6px 6px 0;
+  }
+
+  .tabs button {
+    padding: 10px 8px 12px;
+  }
+
+  input,
+  select,
+  textarea {
+    font-size: 16px;
+  }
+
+  /* 弹窗：从底部弹出的面板 */
+  .modal-backdrop {
+    padding: 0;
+    padding-top: calc(16px + env(safe-area-inset-top));
+    place-items: end stretch;
+  }
+
+  .modal,
+  .modal-wide,
+  .modal-sm,
+  .modal-xl {
+    width: 100%;
+    max-height: calc(100dvh - 16px - env(safe-area-inset-top));
+    border-radius: 18px 18px 0 0;
+    border-bottom: none;
+    animation: sheet-in 0.22s ease-out;
+  }
+
+  .modal-header {
+    padding: 16px 16px 6px;
+  }
+
+  .modal-desc {
+    padding: 0 16px;
+  }
+
+  .modal-body {
+    padding: 12px 16px 16px;
+  }
+
+  .modal-footer {
+    padding: 10px 16px;
+    padding-bottom: calc(10px + env(safe-area-inset-bottom));
+    flex-wrap: wrap;
+  }
+
+  .welcome {
+    padding: 24px 18px;
+    padding-top: calc(56px + env(safe-area-inset-top));
+  }
+
+  .welcome-nav {
+    position: fixed;
+    top: calc(10px + env(safe-area-inset-top));
+    left: 10px;
+  }
+
+  .welcome h1 {
+    font-size: 22px;
+  }
+
   .welcome-cards,
-  .form-grid,
+  .form-grid {
+    grid-template-columns: 1fr;
+  }
+
   .char-roll-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .composer-bar {
+    gap: 4px;
+    padding: 4px 6px 6px 8px;
+  }
+
+  .composer-bar .segmented,
+  .composer-bar .btn {
+    flex: none;
+  }
+
+  .composer-send {
+    width: 38px;
+    height: 38px;
+  }
+
+  .icon-btn.panel-close {
+    width: 36px;
+    height: 36px;
+  }
+
+  .icon-btn.panel-close svg {
+    width: 20px;
+    height: 20px;
+  }
+
+  .card-grid {
     grid-template-columns: 1fr 1fr;
   }
 
-  .messages,
-  .composer {
-    padding-left: 12px;
-    padding-right: 12px;
+  .span-2 {
+    grid-column: auto;
+  }
+
+  .phone-access {
+    grid-template-columns: 1fr;
+  }
+
+  .phone-qr {
+    width: 180px;
+  }
+
+  .toaster {
+    left: 12px;
+    right: 12px;
+    bottom: calc(96px + env(safe-area-inset-bottom));
+    max-width: none;
+    align-items: center;
+  }
+}
+
+@keyframes sheet-in {
+  from {
+    transform: translateY(24px);
+    opacity: 0.6;
+  }
+}
+
+/* 触屏没有「鼠标悬停」：消息工具栏、房间的「⋯」直接显示 */
+@media (hover: none) {
+  .msg-toolbar {
+    opacity: 0.75;
+  }
+
+  .room-more {
+    opacity: 1;
+    background: transparent;
+    box-shadow: none;
+  }
+
+  .room-item-body {
+    padding-right: 24px;
   }
 }

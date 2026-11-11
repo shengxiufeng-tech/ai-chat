@@ -12,6 +12,8 @@ export async function api<T = unknown>(method: string, path: string, body?: unkn
   } catch {
     // 没有 JSON 内容
   }
+  // 手机上的访问码失效了（比如电脑上重置了访问码）：刷新页面重新输入
+  if (res.status === 401 && data?.needCode) location.reload();
   if (!res.ok) throw new Error(data?.error || `请求失败（${res.status}）`);
   return data as T;
 }

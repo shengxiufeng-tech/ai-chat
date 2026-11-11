@@ -225,10 +225,10 @@ function RoomMenu({
       if (ref.current && !ref.current.contains(e.target as Node) && !(e.target as HTMLElement).closest('.room-more')) onClose();
     };
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
-    document.addEventListener('mousedown', onDown);
+    document.addEventListener('pointerdown', onDown);
     window.addEventListener('keydown', onKey);
     return () => {
-      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('pointerdown', onDown);
       window.removeEventListener('keydown', onKey);
     };
   }, [onClose]);

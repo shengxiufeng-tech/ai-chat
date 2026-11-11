@@ -7,6 +7,7 @@ import { attempt } from '../toast';
 import { CacheDiagnostics } from './CacheDiagnostics';
 import { Modal } from './Modal';
 import { ModelInput } from './ModelInput';
+import { PhoneAccess } from './PhoneAccess';
 import { Field } from './ui';
 
 export function SettingsModal({ onClose }: { onClose: () => void }) {
@@ -76,6 +77,8 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
             <span>{testResult.text}</span>
           </div>
         )}
+        <div className="divider" />
+        <PhoneAccess />
         <div className="divider" />
         <CacheDiagnostics defaultModel={s.defaultModel} />
       </div>

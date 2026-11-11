@@ -91,6 +91,7 @@ export function Composer({
             ref={ref}
             value={text}
             rows={1}
+            enterKeyHint="send"
             disabled={!!disabled}
             placeholder={placeholder}
             onChange={(e) => setText(e.target.value)}
@@ -109,7 +110,7 @@ export function Composer({
                 value={ooc ? 'ooc' : 'ic'}
                 onChange={(v) => setOoc(v === 'ooc')}
                 options={[
-                  { value: 'ic', label: <><Drama /> 角色行动</>, title: '以调查员的身份行动或说话' },
+                  { value: 'ic', label: <><Drama /> <span><span className="hide-mobile">角色</span>行动</span></>, title: '以调查员的身份行动或说话' },
                   { value: 'ooc', label: <><MessageCircleQuestion /> 场外</>, title: '玩家本人提问，不推进剧情' },
                 ]}
               />
@@ -125,7 +126,9 @@ export function Composer({
             <span className="spacer" />
             {trpg && (
               <button className="btn btn-sm btn-ghost" onClick={suggest} disabled={suggesting} title="让规则助手给出几个可以尝试的行动">
-                {suggesting ? <Loader2 className="spin" /> : <HelpCircle />} 我该做什么？
+                {suggesting ? <Loader2 className="spin" /> : <HelpCircle />}
+                <span className="hide-mobile">我该做什么？</span>
+                <span className="mobile-only">建议</span>
               </button>
             )}
             {generating && (
@@ -135,7 +138,10 @@ export function Composer({
                 onClick={() => send(true)}
                 title="打断正在发言的 AI，立刻插话"
               >
-                <Zap /> 打断并发送
+                <Zap />
+                <span>
+                  打断<span className="hide-mobile">并发送</span>
+                </span>
               </button>
             )}
             <button

@@ -72,6 +72,8 @@ export function ExportModal({ room, onClose }: { room: Room; onClose: () => void
     }
   };
 
+  // 手机通过局域网（http）打开时，浏览器不允许往剪贴板里写图片
+  const canCopyImage = typeof ClipboardItem !== 'undefined' && !!navigator.clipboard?.write;
   const actions = [
     {
       key: 'png',
@@ -187,7 +189,7 @@ export function ExportModal({ room, onClose }: { room: Room; onClose: () => void
           </div>
           <div className="divider" />
           <div className="export-actions">
-            {actions.map((a) => (
+            {actions.filter((a) => a.key !== 'copy-img' || canCopyImage).map((a) => (
               <button key={a.key} className={`btn ${a.primary ? 'btn-primary' : ''}`} disabled={!!busy || messages.length === 0} onClick={a.fn}>
                 {busy && a.primary ? <Loader2 className="spin" /> : a.icon} {a.label}
               </button>

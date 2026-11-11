@@ -4,6 +4,7 @@ import {
   Eraser,
   GraduationCap,
   Loader2,
+  Menu,
   MessagesSquare,
   MoreHorizontal,
   PanelRightClose,
@@ -17,6 +18,7 @@ import {
   Square,
   Trash2,
   Users,
+  X,
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { otherSpeakerNames } from '../../../shared/text';
@@ -44,15 +46,27 @@ export function RoomView({
   roomId,
   onMetaChange,
   onDeleted,
+  onOpenNav,
 }: {
   roomId: string;
   onMetaChange: () => void;
   onDeleted: () => void;
+  onOpenNav: () => void;
 }) {
   const { room, runner, connected } = useRoom(roomId);
   const [tab, setTab] = useState<Tab | null>(null);
   const [panelOpen, setPanelOpen] = useState(() => window.innerWidth > 1100);
   const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+  // 点菜单外面（包括手机上点一下别处）就收起
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onDown = (e: PointerEvent) => {
+      if (!menuRef.current?.contains(e.target as Node)) setMenuOpen(false);
+    };
+    document.addEventListener('pointerdown', onDown);
+    return () => document.removeEventListener('pointerdown', onDown);
+  }, [menuOpen]);
   const [exporting, setExporting] = useState(false);
   const [wizard, setWizard] = useState(false);
   const [editingTitle, setEditingTitle] = useState(false);
@@ -157,6 +171,9 @@ export function RoomView({
     <div className={`room ${panelOpen ? 'with-panel' : ''}`}>
       <div className="room-main">
         <header className="room-header">
+          <button className="icon-btn mobile-only" onClick={onOpenNav} aria-label="房间列表" title="房间列表">
+            <Menu />
+          </button>
           <div className="room-title">
             <div className="room-title-row">
               {editingTitle ? (
@@ -201,7 +218,12 @@ export function RoomView({
                 </button>
               ) : (
                 <button className="btn btn-primary" onClick={() => attempt(() => post(`${base}/run`))} title="让 AI 们自动轮流对话">
-                  <Play /> {room.messages.length ? '继续' : '开始'}自动对话
+                  <Play />
+                  {/* 手机上只显示「继续 / 开始」 */}
+                  <span>
+                    {room.messages.length ? '继续' : '开始'}
+                    <span className="hide-mobile">自动对话</span>
+                  </span>
                 </button>
               ))}
             {!trpg && (
@@ -236,17 +258,26 @@ export function RoomView({
                 <Square /> 停止
               </button>
             )}
-            <span className="toolbar-sep" />
-            <button className="icon-btn" title="导出与分享" onClick={() => setExporting(true)} disabled={room.messages.length === 0}>
+            <span className="toolbar-sep hide-mobile" />
+            <button className="icon-btn hide-mobile" title="导出与分享" onClick={() => setExporting(true)} disabled={room.messages.length === 0}>
               <Share2 />
             </button>
-            <div className="menu">
+            <div className="menu" ref={menuRef}>
               <button className="icon-btn" onClick={() => setMenuOpen((x) => !x)} aria-label="更多" title="更多">
                 <MoreHorizontal />
               </button>
               {menuOpen && (
-                <div className="menu-list" onMouseLeave={() => setMenuOpen(false)}>
+                <div className="menu-list">
                   <button
+                    onClick={() => {
+                      setMenuOpen(false);
+                      setEditingTitle(true);
+                    }}
+                  >
+                    <Pencil /> 重命名
+                  </button>
+                  <button
+                    disabled={room.messages.length === 0}
                     onClick={() => {
                       setMenuOpen(false);
                       setExporting(true);
@@ -346,6 +377,7 @@ export function RoomView({
         />
       </div>
 
+      {panelOpen && <div className="panel-backdrop" onClick={() => setPanelOpen(false)} />}
       {panelOpen && (
         <aside className="room-panel">
           <div className="tabs">
@@ -355,6 +387,9 @@ export function RoomView({
                 {x.label}
               </button>
             ))}
+            <button className="icon-btn sm panel-close" onClick={() => setPanelOpen(false)} aria-label="收起侧栏" title="收起">
+              <X />
+            </button>
           </div>
           {activeTab === 'participants' && <ParticipantPanel room={room} runner={runner} />}
           {activeTab === 'settings' && <RoomSettingsPanel room={room} />}

@@ -3,6 +3,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import express, { type NextFunction, type Request, type Response } from 'express';
+import QRCode from 'qrcode';
 import { OCCUPATIONS, quickInvestigator, type InvestigatorSheet, type TrpgState } from '../shared/coc.ts';
 import type {
   AppSettings,
@@ -13,6 +14,7 @@ import type {
   TrpgCreateOptions,
 } from '../shared/types.ts';
 import { DEFAULT_ROOM_SETTINGS } from '../shared/types.ts';
+import { AccessControl, lanAddresses } from './access.ts';
 import { estimateTokens } from './context.ts';
 import { completeChat, completeChatWithUsage, listModels, primeModelCache, type ChatMessage } from './llm.ts';
 import { BUILTIN_TEMPLATES, ROOM_PRESETS } from './presets.ts';
@@ -29,13 +31,19 @@ try {
 }
 
 const PORT = Number(process.env.PORT || 8787);
-const HOST = process.env.HOST || '127.0.0.1';
+// npm run lan（或 npm start -- --lan）：让同一个 Wi-Fi 下的手机也能访问
+const LAN_FLAG = process.argv.includes('--lan');
+const HOST = process.env.HOST || (LAN_FLAG ? '0.0.0.0' : '127.0.0.1');
+const LAN_MODE = !['127.0.0.1', 'localhost', '::1'].includes(HOST);
 const DATA_DIR = path.resolve(process.env.DATA_DIR || './data');
 
 const store = new Store(DATA_DIR);
 const runners = new RunnerManager(store);
 const app = express();
 app.use(express.json({ limit: '25mb' }));
+// 其他设备（手机）要先输入访问码；本机访问不受影响
+const access = new AccessControl(DATA_DIR);
+app.use(access.middleware);
 
 class HttpError extends Error {
   constructor(
@@ -113,6 +121,36 @@ function cleanSettings(input: Partial<RoomSettings>): Partial<RoomSettings> {
   if (input.promptMode && ['standard', 'humanlike'].includes(input.promptMode)) out.promptMode = input.promptMode;
   return out;
 }
+
+// ---------------- 手机访问 ----------------
+
+async function accessInfo(withCode: boolean) {
+  const code = access.accessCode;
+  const urls = LAN_MODE
+    ? await Promise.all(
+        lanAddresses().map(async (ip) => {
+          const url = `http://${ip}:${PORT}/`;
+          const qr = await QRCode.toString(`${url}?code=${code}`, { type: 'svg', margin: 1, errorCorrectionLevel: 'M' });
+          return { url, qr: withCode ? qr : '' };
+        }),
+      )
+    : [];
+  return { lan: LAN_MODE, port: PORT, code: withCode ? code : '', urls };
+}
+
+app.get(
+  '/api/access',
+  h((req) => accessInfo(access.isLocal(req))),
+);
+
+app.post(
+  '/api/access/reset',
+  h((req) => {
+    if (!access.isLocal(req)) throw new HttpError(403, '只能在电脑上重置访问码');
+    access.reset();
+    return accessInfo(true);
+  }),
+);
 
 // ---------------- 设置与模型 ----------------
 
@@ -743,11 +781,25 @@ app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
   res.status(status).json({ error: message });
 });
 
-const server = app.listen(PORT, HOST, () => {
+const server = app.listen(PORT, HOST, async () => {
   const s = store.getSettings();
-  console.log(`\n  AI 对话室后端已启动：http://${HOST}:${PORT}`);
+  console.log(`\n  AI 对话室已启动：http://localhost:${PORT}`);
   console.log(`  模型服务：${s.baseUrl}${s.baseUrl === 'mock' ? '（模拟模式）' : ''}`);
   console.log(`  数据目录：${DATA_DIR}\n`);
+  if (LAN_MODE) {
+    const ips = lanAddresses();
+    if (!ips.length) {
+      console.log('  局域网访问已开启，但没有找到这台电脑的局域网 IP，请确认已经连上 Wi-Fi 或网线。\n');
+      return;
+    }
+    console.log('  📱 手机访问（手机和电脑要连同一个 Wi-Fi）：');
+    for (const ip of ips) console.log(`     http://${ip}:${PORT}`);
+    console.log(`     访问码：${access.accessCode}（第一次访问时输入，之后手机会记住）\n`);
+    console.log('  用手机相机扫这个二维码可以直接打开，不用输入访问码：');
+    const qr = await QRCode.toString(`http://${ips[0]}:${PORT}/?code=${access.accessCode}`, { type: 'terminal', small: true });
+    console.log(qr.replace(/^/gm, '  '));
+    console.log('  打不开的话：检查电脑防火墙是否允许 Node.js 接受局域网连接。\n');
+  }
 });
 
 function shutdown() {

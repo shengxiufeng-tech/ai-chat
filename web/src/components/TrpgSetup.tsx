@@ -55,7 +55,7 @@ export function TrpgSetup({ room, onCreate }: { room: Room; onCreate: () => void
       )}
       <p className="hint" style={{ fontSize: 13 }}>
         <b style={{ color: 'var(--text)' }}>跑团怎么玩？</b> 守秘人（AI）描述场景、扮演故事里的所有人物；你决定你的调查员做什么、说什么。
-        结果不确定的时候掷骰子决定成败。不懂的随时问右侧的「规则助手」。
+        结果不确定的时候掷骰子决定成败。不懂的随时问侧栏里的「规则助手」。
         {teammates.length > 0 && ` 这次还有 ${teammates.map((p) => p.name).join('、')} 作为 AI 队友陪你一起调查。`}
       </p>
       <div className="setup-steps">
