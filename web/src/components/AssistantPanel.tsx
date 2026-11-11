@@ -34,14 +34,14 @@ export function AssistantPanel({ room }: { room: Room }) {
   };
 
   return (
-    <div className="assistant">
+    <div className="assistant-panel">
       <div className="assistant-log" ref={ref}>
         <div className="callout callout-info">
           <GraduationCap />
           <span>我是规则助手，随时可以问我规则或者"现在该干嘛"。我看不到剧本的秘密，也不会剧透；守秘人也看不到我们的对话。</span>
         </div>
         {log.map((e, i) => (
-          <div key={i} className={`assistant-msg ${e.role}`}>
+          <div key={i} className={`assistant-msg is-${e.role}`}>
             {e.role === 'assistant' ? (
               <div className="markdown">
                 <ReactMarkdown>{e.content}</ReactMarkdown>
@@ -53,8 +53,8 @@ export function AssistantPanel({ room }: { room: Room }) {
         ))}
         {pending && (
           <>
-            <div className="assistant-msg user">{pending}</div>
-            <div className="assistant-msg assistant">
+            <div className="assistant-msg is-user">{pending}</div>
+            <div className="assistant-msg is-assistant">
               <span className="typing-dots">
                 <i />
                 <i />

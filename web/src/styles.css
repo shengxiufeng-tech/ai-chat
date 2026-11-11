@@ -118,6 +118,13 @@ button:disabled {
   outline-offset: 2px;
 }
 
+/* 输入框有自己的聚焦样式（边框 + 光晕），不再叠加外框 */
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+  outline: none;
+}
+
 input,
 textarea,
 select {
@@ -1239,6 +1246,11 @@ h4 {
   display: flex;
   flex-direction: column;
   gap: 18px;
+}
+
+.messages > *,
+.messages-inner > * {
+  flex-shrink: 0;
 }
 
 .messages-inner {
@@ -2648,10 +2660,10 @@ h4 {
   height: 12px;
 }
 
-.assistant {
+.assistant-panel {
   display: flex;
   flex-direction: column;
-  height: 100%;
+  flex: 1;
   min-height: 0;
 }
 
@@ -2664,6 +2676,10 @@ h4 {
   gap: 10px;
 }
 
+.assistant-log > * {
+  flex-shrink: 0;
+}
+
 .assistant-msg {
   max-width: 92%;
   padding: 8px 12px;
@@ -2672,13 +2688,13 @@ h4 {
   line-height: 1.65;
 }
 
-.assistant-msg.user {
+.assistant-msg.is-user {
   align-self: flex-end;
   background: var(--human-bubble);
   border: 1px solid var(--human-border);
 }
 
-.assistant-msg.assistant {
+.assistant-msg.is-assistant {
   align-self: flex-start;
   background: var(--surface-2);
   border: 1px solid var(--border);
@@ -2699,9 +2715,16 @@ h4 {
 }
 
 .assistant-input textarea {
+  flex: 1;
+  width: auto;
+  min-width: 0;
   resize: none;
   min-height: 36px;
   max-height: 120px;
+}
+
+.composer-send {
+  flex: none;
 }
 
 /* 车卡向导 */
