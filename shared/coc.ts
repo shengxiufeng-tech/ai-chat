@@ -60,7 +60,35 @@ export interface TrpgState {
   started: boolean;
   /** 规则助手的对话记录 */
   assistantLog: AssistantEntry[];
+  /** 守秘人笔记：开启后守秘人会记录 NPC 和线索（玩家可见） */
+  notebook: boolean;
+  notes: NoteEntry[];
 }
+
+export type NoteKind = 'npc' | 'clue';
+
+/** 守秘人笔记里的一条：NPC 或线索。玩家可以看到 */
+export interface NoteEntry {
+  id: string;
+  kind: NoteKind;
+  /** NPC 名字或线索标题 */
+  title: string;
+  text: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** 主对话里「记下了一条笔记」的提示 */
+export interface NoteEvent {
+  noteId: string;
+  kind: NoteKind;
+  title: string;
+  text: string;
+  /** 是更新已有的条目 */
+  updated: boolean;
+}
+
+export const NOTE_KIND_LABELS: Record<NoteKind, string> = { npc: 'NPC', clue: '线索' };
 
 export type Difficulty = 'regular' | 'hard' | 'extreme';
 export type SuccessLevel = 'critical' | 'extreme' | 'hard' | 'regular' | 'fail' | 'fumble';
@@ -694,7 +722,7 @@ export function resolveTarget(sheet: InvestigatorSheet, rawName: string): { name
 // ---------------- 文本 ----------------
 
 /** 守秘人指令的正则：[检定:侦查]、【理智：1/1d6】等 */
-export const COMMAND_RE = /[[【]\s*(检定|理智|掷骰|HP|MP|SAN|幸运|物品)\s*[:：]\s*([^\]】\n]{1,80})[\]】]/gi;
+export const COMMAND_RE = /[[【]\s*(检定|理智|掷骰|HP|MP|SAN|幸运|物品|NPC|线索)\s*[:：]\s*([^\]】\n]{1,240})[\]】]/gi;
 
 /** 去掉消息里的守秘人指令（显示用） */
 export function stripCommands(text: string) {

@@ -247,14 +247,16 @@ export async function completeChat(opts: ChatOptions): Promise<string> {
 export async function listModels(baseUrl: string, apiKey: string): Promise<ModelInfo[]> {
   if (isMock(baseUrl)) {
     return [
-      { id: 'mock/fast', name: '模拟模型（快）', ownedBy: 'mock', reasoning: false, reasoningLevels: [] },
+      { id: 'mock/fast', name: '模拟模型（快）', ownedBy: 'mock', reasoning: false, reasoningLevels: [], contextWindow: 128_000 },
       {
         id: 'mock/thinker',
         name: '模拟模型（带思考）',
         ownedBy: 'mock',
         reasoning: true,
         reasoningLevels: ['low', 'medium', 'high', 'xhigh'],
+        contextWindow: 200_000,
       },
+      { id: 'mock/tiny', name: '模拟模型（上下文很小，测试裁剪用）', ownedBy: 'mock', reasoning: false, reasoningLevels: [], contextWindow: 6_000 },
     ];
   }
   let res: Response;
@@ -273,6 +275,29 @@ export async function listModels(baseUrl: string, apiKey: string): Promise<Model
     .filter((m) => typeof m?.id === 'string' && (m.kind === undefined || m.kind === 'chat'))
     .map((m) => parseModel(m))
     .sort((a, b) => a.id.localeCompare(b.id));
+}
+
+// ---------------- 模型信息缓存（用来查上下文窗口） ----------------
+
+const MODEL_CACHE_TTL = 10 * 60 * 1000;
+const modelCache = new Map<string, { at: number; models: Promise<ModelInfo[]> }>();
+
+/** 带缓存的模型列表；读取失败时返回空列表（10 分钟内不再重试，避免每次发言都去请求） */
+export function cachedModels(baseUrl: string, apiKey: string, { force = false } = {}): Promise<ModelInfo[]> {
+  const hit = modelCache.get(baseUrl);
+  if (!force && hit && Date.now() - hit.at < MODEL_CACHE_TTL) return hit.models;
+  const models = listModels(baseUrl, apiKey).catch(() => [] as ModelInfo[]);
+  modelCache.set(baseUrl, { at: Date.now(), models });
+  return models;
+}
+
+export function primeModelCache(baseUrl: string, models: ModelInfo[]) {
+  modelCache.set(baseUrl, { at: Date.now(), models: Promise.resolve(models) });
+}
+
+export async function contextWindowOf(baseUrl: string, apiKey: string, model: string): Promise<number | undefined> {
+  const models = await cachedModels(baseUrl, apiKey);
+  return models.find((m) => m.id === model)?.contextWindow;
 }
 
 /** 解析一条模型信息，兼容 Magpie 的 supported_reasoning_levels / reasoning_levels */
@@ -340,9 +365,9 @@ async function* mockStream(opts: ChatOptions): AsyncGenerator<ChatChunk> {
     const afterRoll = last.includes('【骰子】');
     const opening = last.includes('请开场');
     const text = opening
-      ? '（模拟守秘人）傍晚，乌篷船靠上了白水镇的码头，雾气像湿棉花一样裹住了整个小镇。船夫压低声音说："天黑以后，别去镇中心的井边。"你打算怎么做？'
+      ? '（模拟守秘人）傍晚，乌篷船靠上了白水镇的码头，雾气像湿棉花一样裹住了整个小镇。船夫压低声音说："天黑以后，别去镇中心的井边。"你打算怎么做？[NPC:老船夫:撑乌篷船的老汉，沉默寡言，警告你天黑后别去镇中心的井边]'
       : afterRoll
-        ? '（模拟守秘人）根据骰子的结果，你注意到了一些不寻常的东西……雾里似乎传来若有若无的歌声。你接下来要做什么？'
+        ? '（模拟守秘人）根据骰子的结果，你注意到了一些不寻常的东西……雾里似乎传来若有若无的歌声。你接下来要做什么？[线索:雾中的歌声:码头附近能隐约听到女人哼唱的歌声，像是从镇中心传来]'
         : '（模拟守秘人）你仔细打量四周，似乎有什么东西藏在暗处。\n\n【规则小贴士】需要用「侦查」来发现隐藏的东西。[检定:侦查]';
     for (const ch of Array.from(text)) {
       await sleep(8, opts.signal);

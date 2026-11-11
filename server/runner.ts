@@ -2,11 +2,13 @@
 
 import type { InvestigatorSheet } from '../shared/coc.ts';
 import type { Message, Participant, Room, RoomEvent, RunnerState, RunStatus } from '../shared/types.ts';
-import { completeChat, streamChat } from './llm.ts';
+import { DEFAULT_CONTEXT_WINDOW, fitToContext } from './context.ts';
+import { completeChat, contextWindowOf, streamChat } from './llm.ts';
 import {
   buildKpMessages,
   buildTeammateMessages,
   kpOf,
+  noteMessage,
   processKpCommands,
   resolveCheck,
   resolveSan,
@@ -46,6 +48,8 @@ export class RoomRunner {
   private teammatesActed = false;
   /** 跑团：守秘人因为自动掷骰连续接着说的次数 */
   private kpChain = 0;
+  /** 已经提示过「上下文被裁剪」的 参与者:模型 */
+  private trimNotified = new Set<string>();
 
   constructor(
     private roomId: string,
@@ -349,7 +353,13 @@ export class RoomRunner {
       room.messages.push(msg);
       this.emit({ type: 'message_added', message: msg });
     }
-    if (res.sheetsChanged) this.emitRoomMeta();
+    // 笔记有更新时，在主对话里提示一下
+    for (const ev of res.notes) {
+      const msg = noteMessage(newId(), ev);
+      room.messages.push(msg);
+      this.emit({ type: 'message_added', message: msg });
+    }
+    if (res.sheetsChanged || res.notes.length) this.emitRoomMeta();
     this.store.touchRoom(room.id, { immediate: true });
 
     if (res.pendingHuman > 0) return; // 等玩家掷骰
@@ -557,13 +567,27 @@ export class RoomRunner {
 
     let ok = true;
     try {
+      // 按模型的上下文窗口裁掉最早的对话
+      const window = (await contextWindowOf(settings.baseUrl, settings.apiKey, model)) ?? DEFAULT_CONTEXT_WINDOW;
+      const fit = fitToContext((h) => this.buildMessages(room, p, h), history, window);
+      if (fit.dropped > 0) {
+        message.trimmed = fit.dropped;
+        const key = `${p.id}:${model}`;
+        if (!this.trimNotified.has(key)) {
+          this.trimNotified.add(key);
+          const notebook = room.mode === 'trpg' && room.trpg?.notebook;
+          this.notice(
+            `对话已经接近「${p.name}」所用模型的上下文上限（约 ${Math.round(window / 1000)}k），更早的消息不再发给它${notebook ? '，重要的 NPC 和线索仍然记在守秘人笔记里' : ''}。`,
+          );
+        }
+      }
       const stream = streamChat({
         baseUrl: settings.baseUrl,
         apiKey: settings.apiKey,
         model,
         temperature: p.temperature,
         reasoningEffort: p.reasoningEffort || undefined,
-        messages: this.buildMessages(room, p, history),
+        messages: fit.messages,
         signal: controller.signal,
       });
       for await (const chunk of stream) {

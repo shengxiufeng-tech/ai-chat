@@ -47,6 +47,8 @@ export function normalizeRoom(room: Room): Room {
   if (room.trpg) {
     room.trpg.assistantLog = room.trpg.assistantLog ?? [];
     room.trpg.sheets = room.trpg.sheets ?? {};
+    room.trpg.notebook = room.trpg.notebook ?? true;
+    room.trpg.notes = room.trpg.notes ?? [];
   }
   return room;
 }

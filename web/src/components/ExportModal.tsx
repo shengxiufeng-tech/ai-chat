@@ -48,7 +48,7 @@ export function ExportModal({ room, onClose }: { room: Room; onClose: () => void
         : range === 'custom'
           ? room.messages.slice(Math.max(0, from - 1), Math.max(from, to))
           : room.messages;
-    return list.filter((m) => m.status !== 'streaming' && m.status !== 'error' && (o.rolls || m.kind !== 'roll'));
+    return list.filter((m) => m.status !== 'streaming' && m.status !== 'error' && (o.rolls || !m.kind));
   }, [room.messages, range, recent, from, to, o.rolls]);
 
   const base = room.title || '对话';
@@ -183,7 +183,7 @@ export function ExportModal({ room, onClose }: { room: Room; onClose: () => void
             <ToggleRow label="时间" checked={o.time} onChange={(v) => set('time', v)} />
             <ToggleRow label="思考过程" checked={o.reasoning} onChange={(v) => set('reasoning', v)} />
             <ToggleRow label={room.mode === 'trpg' ? '剧本简介' : '场景 / 话题'} checked={o.scenario} onChange={(v) => set('scenario', v)} />
-            {room.mode === 'trpg' && <ToggleRow label="骰子和数值变化" checked={o.rolls} onChange={(v) => set('rolls', v)} />}
+            {room.mode === 'trpg' && <ToggleRow label="骰子、数值和笔记提示" checked={o.rolls} onChange={(v) => set('rolls', v)} />}
           </div>
           <div className="divider" />
           <div className="export-actions">
@@ -209,14 +209,14 @@ const ExportDocView = forwardRef<HTMLDivElement, { room: Room; messages: Message
 ) {
   const date = new Date();
   const dateText = `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日`;
-  const visible = messages.filter((m) => m.kind === 'roll' || displayContent(room, m));
+  const visible = messages.filter((m) => m.kind || displayContent(room, m));
   return (
     <div ref={ref} className={`export-doc theme-${o.theme}`}>
       <div className="x-head">
         <div className="x-kicker">{room.mode === 'trpg' ? 'COC 7 跑团记录' : 'AI 对话室'}</div>
         <h1>{room.title}</h1>
         <div className="x-meta">
-          {dateText} · {visible.filter((m) => m.kind !== 'roll').length} 条发言 · {room.participants.length} 位 AI
+          {dateText} · {visible.filter((m) => !m.kind).length} 条发言 · {room.participants.length} 位 AI
         </div>
         <div className="x-cast">
           {room.participants.map((p) => (
@@ -236,10 +236,10 @@ const ExportDocView = forwardRef<HTMLDivElement, { room: Room; messages: Message
       </div>
       <div className="x-msgs">
         {visible.map((m) => {
-          if (m.kind === 'roll') {
+          if (m.kind) {
             return (
               <div key={m.id} className="x-roll">
-                🎲 {m.content}
+                {m.kind === 'note' ? '📒' : '🎲'} {m.content}
               </div>
             );
           }

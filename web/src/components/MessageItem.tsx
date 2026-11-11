@@ -1,4 +1,4 @@
-import { AlertCircle, Brain, Check, ChevronRight, Copy, Lightbulb, Pencil, RotateCcw, Trash2, User } from 'lucide-react';
+import { AlertCircle, BookMarked, Brain, Check, ChevronRight, Copy, Lightbulb, Pencil, RotateCcw, Scissors, Trash2, User } from 'lucide-react';
 import { memo, useState, type CSSProperties } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -59,6 +59,7 @@ export const MessageItem = memo(function MessageItem({
   onRegenerate,
   onRoll,
   onPush,
+  onOpenNotes,
 }: {
   message: Message;
   isLast: boolean;
@@ -71,10 +72,26 @@ export const MessageItem = memo(function MessageItem({
   onRegenerate: (id: string) => void;
   onRoll?: (id: string) => Promise<unknown>;
   onPush?: (id: string) => Promise<unknown>;
+  onOpenNotes?: () => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(m.content);
   const [copied, setCopied] = useState(false);
+
+  if (m.kind === 'note' && m.note) {
+    return (
+      <div className="roll-row">
+        <button className="note-chip" onClick={onOpenNotes} title="打开守秘人笔记">
+          <BookMarked />
+          <span>
+            守秘人{m.note.updated ? '更新了' : '记下了'}{m.note.kind === 'npc' ? ' NPC ' : '线索'}
+            <b>「{m.note.title}」</b>
+          </span>
+          <span className="note-chip-link">查看笔记</span>
+        </button>
+      </div>
+    );
+  }
 
   if (m.kind === 'roll' && m.roll) {
     return (
@@ -113,6 +130,11 @@ export const MessageItem = memo(function MessageItem({
           <ModelTag model={m.model} effort={m.reasoningEffort} />
           <span className="msg-time">{time(m.createdAt)}</span>
           {m.status === 'interrupted' && <span className="badge badge-warn">被打断</span>}
+          {!!m.trimmed && (
+            <span className="badge" title={`生成这条消息时对话太长，最早的 ${m.trimmed} 条消息没有发给模型`}>
+              <Scissors /> 省略了 {m.trimmed} 条早期消息
+            </span>
+          )}
           {!streaming && !editing && (
             <div className="msg-toolbar">
               <button className="icon-btn sm" title={copied ? '已复制' : '复制'} onClick={copy}>

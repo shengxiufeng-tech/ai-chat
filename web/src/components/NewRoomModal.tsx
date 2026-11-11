@@ -55,6 +55,7 @@ export function NewRoomModal({
     teammateModel: '',
     teachingMode: true,
     autoRoll: false,
+    notebook: true,
     humanName: '我',
   });
   const setTrpg = <K extends keyof TrpgCreateOptions>(k: K, v: TrpgCreateOptions[K]) => setT((x) => ({ ...x, [k]: v }));
@@ -215,6 +216,12 @@ export function NewRoomModal({
               </Field>
             </div>
             <ToggleRow label="新手教学模式" hint="规则第一次出现时，守秘人会附上「规则小贴士」" checked={t.teachingMode} onChange={(v) => setTrpg('teachingMode', v)} />
+            <ToggleRow
+              label="守秘人笔记"
+              hint="守秘人自动记下重要的 NPC 和线索，你随时可以翻看"
+              checked={t.notebook ?? true}
+              onChange={(v) => setTrpg('notebook', v)}
+            />
             <ToggleRow label="自动替我掷骰" hint="关闭时由你亲手点「掷骰」，更有参与感" checked={t.autoRoll} onChange={(v) => setTrpg('autoRoll', v)} />
           </>
         )}

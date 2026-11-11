@@ -44,6 +44,8 @@ function trpgRoom(autoRoll = false): Room {
     sheets: { player, mate },
     started: true,
     assistantLog: [],
+    notebook: true,
+    notes: [],
   };
   return {
     id: 'r',
@@ -209,4 +211,80 @@ test('拟人模式只有一句提示词，两人对话不加名字', () => {
   history.push(msg({ role: 'human', speakerName: '小明', content: '我也来' }));
   const out2 = buildHumanlikeMessages(room, a, history);
   assert.match(out2.at(-1)!.content, /乙：最近怎么样\n\n小明：我也来/);
+});
+
+test('笔记：记下、更新、重复不提示、关闭时忽略', () => {
+  const room = trpgRoom();
+  const notes = room.trpg!.notes;
+  let res = processKpCommands(room, '周婶抬头看了你一眼。[NPC:周婶:茶馆老板娘，热心但胆小] [线索:沈怀瑾住在陆家老宅的厢房]');
+  assert.equal(res.notes.length, 2);
+  assert.equal(notes.length, 2);
+  assert.deepEqual(
+    notes.map((n) => [n.kind, n.title]),
+    [
+      ['npc', '周婶'],
+      ['clue', '沈怀瑾住在陆家老宅的厢房'],
+    ],
+  );
+  assert.equal(res.rolls.length, 0);
+  assert.equal(res.needContinue, false);
+
+  res = processKpCommands(room, '[NPC:周婶:茶馆老板娘，热心但胆小，知道七月十五要祭井]');
+  assert.equal(res.notes[0].updated, true);
+  assert.equal(notes.length, 2);
+  assert.match(notes[0].text, /祭井/);
+
+  res = processKpCommands(room, '[NPC:周婶:茶馆老板娘，热心但胆小，知道七月十五要祭井]');
+  assert.equal(res.notes.length, 0); // 内容没变不重复提示
+
+  res = processKpCommands(room, '[线索:这是一条很长很长的线索内容，标题会被截断成十四个字]');
+  assert.match(res.notes[0].title, /…$/);
+
+  room.trpg!.notebook = false;
+  res = processKpCommands(room, '[NPC:阿青:族长的孙女]');
+  assert.equal(res.notes.length, 0);
+  assert.equal(notes.length, 3);
+});
+
+test('提示词：系统提示不含会变的数值，状态和笔记在最后一条消息里', () => {
+  const room = trpgRoom();
+  room.trpg!.notes.push({ id: 'n1', kind: 'clue', title: '井里的歌声', text: '子时能听到歌声', createdAt: 0, updatedAt: 0 });
+  room.messages = [
+    msg({ role: 'ai', participantId: 'kp', speakerName: '守秘人', content: '你来到茶馆。' }),
+    msg({ role: 'human', content: '我找老板娘聊天', speakerName: '小明' }),
+    msg({ role: 'system', kind: 'note', content: '守秘人记下了线索「井里的歌声」：子时能听到歌声' }),
+  ];
+  const kp = buildKpMessages(room, room.participants[0], room.messages);
+  const system = kp[0].content;
+  assert.match(system, /玩家随时可以翻看/); // 告诉守秘人玩家能看到笔记
+  assert.match(system, /剧本真相.*一律不能写进笔记/);
+  assert.doesNotMatch(system, /HP \d+\/\d+/); // 数值不在系统提示里
+  const last = kp.at(-1)!.content;
+  assert.match(last, /【当前状态】/);
+  assert.match(last, /HP \d+\/\d+/);
+  assert.match(last, /井里的歌声：子时能听到歌声/);
+  // 笔记提示消息不会进入历史
+  assert.doesNotMatch(kp.map((m) => m.content).join('\n'), /守秘人记下了/);
+
+  // 扣血之后：系统提示和之前的历史完全不变（提示缓存可以命中），只有最后一条变化
+  processKpCommands(room, '[HP:-2]');
+  const after = buildKpMessages(room, room.participants[0], room.messages);
+  assert.equal(after[0].content, system);
+  assert.deepEqual(after.slice(0, -1), kp.slice(0, -1));
+  assert.notEqual(after.at(-1)!.content, last);
+
+  // 关闭笔记后，系统提示里没有笔记说明
+  room.trpg!.notebook = false;
+  assert.doesNotMatch(buildKpMessages(room, room.participants[0], room.messages)[0].content, /守秘人笔记】/);
+});
+
+test('队友：自己的数值和共享笔记在最后一条消息里', () => {
+  const room = trpgRoom();
+  room.trpg!.notes.push({ id: 'n1', kind: 'npc', title: '周婶', text: '茶馆老板娘', createdAt: 0, updatedAt: 0 });
+  room.messages = [msg({ role: 'ai', participantId: 'kp', speakerName: '守秘人', content: '你们走进茶馆。[NPC:周婶:茶馆老板娘]' })];
+  const out = buildTeammateMessages(room, room.participants[1], room.messages);
+  assert.doesNotMatch(out[0].content, /HP \d+\/\d+/);
+  assert.match(out.at(-1)!.content, /【你的调查员当前状态】[\s\S]*HP \d+\/\d+/);
+  assert.match(out.at(-1)!.content, /【调查笔记】[\s\S]*周婶：茶馆老板娘/);
+  assert.doesNotMatch(out.map((m) => m.content).join('\n'), /\[NPC/);
 });

@@ -33,6 +33,12 @@ export function TrpgSettingsPanel({ room }: { room: Room }) {
         onChange={(v) => set({ autoRoll: v })}
       />
       <ToggleRow
+        label="守秘人笔记"
+        hint="守秘人自动记下重要的 NPC 和线索（你能在「笔记」页看到），长时间游戏不容易前后矛盾"
+        checked={trpg.notebook}
+        onChange={(v) => set({ notebook: v })}
+      />
+      <ToggleRow
         label="AI 队友自动行动"
         hint="守秘人说完后，每位队友说一句自己的行动"
         checked={trpg.teammatesAct}

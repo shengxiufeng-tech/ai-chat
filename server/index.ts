@@ -13,7 +13,7 @@ import type {
   TrpgCreateOptions,
 } from '../shared/types.ts';
 import { DEFAULT_ROOM_SETTINGS } from '../shared/types.ts';
-import { completeChat, listModels } from './llm.ts';
+import { completeChat, listModels, primeModelCache } from './llm.ts';
 import { BUILTIN_TEMPLATES, ROOM_PRESETS } from './presets.ts';
 import { RunnerManager } from './runner.ts';
 import { BAISHUI, customScenario, improvScenario } from './scenarios.ts';
@@ -136,7 +136,9 @@ app.get(
   h(async () => {
     const s = store.getSettings();
     try {
-      return { models: await listModels(s.baseUrl, s.apiKey) };
+      const models = await listModels(s.baseUrl, s.apiKey);
+      primeModelCache(s.baseUrl, models);
+      return { models };
     } catch (err) {
       throw new HttpError(502, err instanceof Error ? err.message : String(err));
     }
@@ -248,6 +250,8 @@ function createTrpgRoom(o: TrpgCreateOptions): Room {
     sheets: {},
     started: false,
     assistantLog: [],
+    notebook: o.notebook ?? true,
+    notes: [],
   };
   const count = Math.max(0, Math.min(3, Math.floor(o.teammateCount ?? 0)));
   const occupations = [...OCCUPATIONS].sort(() => Math.random() - 0.5);
@@ -507,12 +511,38 @@ app.patch(
   h((req) => {
     const room = getTrpgRoom(param(req, 'id'));
     const b = req.body ?? {};
-    for (const key of ['teachingMode', 'autoRoll', 'teammatesAct'] as const) {
+    for (const key of ['teachingMode', 'autoRoll', 'teammatesAct', 'notebook'] as const) {
       if (typeof b[key] === 'boolean') room.trpg[key] = b[key];
     }
     store.touchRoom(room.id, { immediate: true });
     runners.get(room.id).emitRoomMeta();
     return { ok: true };
+  }),
+);
+
+app.patch(
+  '/api/rooms/:id/notes/:nid',
+  h((req) => {
+    const room = getTrpgRoom(param(req, 'id'));
+    const note = room.trpg.notes.find((n) => n.id === param(req, 'nid'));
+    if (!note) throw new HttpError(404, '笔记不存在');
+    const b = req.body ?? {};
+    if (typeof b.title === 'string' && b.title.trim()) note.title = b.title.trim().slice(0, 40);
+    if (typeof b.text === 'string' && b.text.trim()) note.text = b.text.trim().slice(0, 400);
+    note.updatedAt = Date.now();
+    store.touchRoom(room.id, { immediate: true });
+    runners.get(room.id).emitRoomMeta();
+    return note;
+  }),
+);
+
+app.delete(
+  '/api/rooms/:id/notes/:nid',
+  h((req) => {
+    const room = getTrpgRoom(param(req, 'id'));
+    room.trpg.notes = room.trpg.notes.filter((n) => n.id !== param(req, 'nid'));
+    store.touchRoom(room.id, { immediate: true });
+    runners.get(room.id).emitRoomMeta();
   }),
 );
 

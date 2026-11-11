@@ -2042,6 +2042,125 @@ mark {
   color: var(--ok);
 }
 
+/* 笔记提示（主对话里） */
+.note-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: min(560px, 100%);
+  padding: 5px 6px 5px 12px;
+  border-radius: 999px;
+  border: 1px dashed var(--accent);
+  background: var(--accent-soft);
+  color: var(--text-2);
+  font-size: 12.5px;
+  text-align: left;
+  transition: border-style 0.15s;
+}
+
+.note-chip:hover {
+  border-style: solid;
+}
+
+.note-chip > svg {
+  width: 14px;
+  height: 14px;
+  color: var(--accent-text);
+  flex: none;
+}
+
+.note-chip > span:first-of-type {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.note-chip b {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.note-chip-link {
+  flex: none;
+  color: var(--accent-text);
+  background: var(--surface-1);
+  border-radius: 999px;
+  padding: 1px 9px;
+  font-size: 11.5px;
+  font-weight: 550;
+}
+
+/* 笔记页 */
+.notes-section + .notes-section {
+  margin-top: 20px;
+}
+
+.notes-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 8px;
+}
+
+.notes-title svg {
+  width: 13px;
+  height: 13px;
+}
+
+.note-card {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 9px 11px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 8px;
+  transition: border-color 0.3s;
+}
+
+.note-card.fresh {
+  border-color: var(--accent);
+}
+
+.note-card.editing {
+  gap: 8px;
+}
+
+.note-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 24px;
+}
+
+.note-title {
+  font-weight: 650;
+  font-size: 13.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.note-text {
+  font-size: 13px;
+  color: var(--text-2);
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
+.note-actions {
+  display: flex;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.note-card:hover .note-actions,
+.note-actions:focus-within {
+  opacity: 1;
+}
+
 /* ============ 输入区 ============ */
 
 .composer {
@@ -2158,18 +2277,26 @@ mark {
 
 .tabs {
   display: flex;
-  gap: 2px;
-  padding: 10px 12px 0;
+  gap: 0;
+  padding: 10px 8px 0;
   border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  scrollbar-width: none;
+  flex: none;
+}
+
+.tabs::-webkit-scrollbar {
+  display: none;
 }
 
 .tabs button {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
   background: none;
   border: none;
-  padding: 8px 10px 10px;
+  padding: 8px 8px 10px;
+  flex: none;
   color: var(--text-3);
   font-size: 13px;
   font-weight: 550;

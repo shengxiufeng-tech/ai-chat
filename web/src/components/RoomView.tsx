@@ -1,4 +1,5 @@
 import {
+  BookMarked,
   BookUser,
   Eraser,
   GraduationCap,
@@ -28,6 +29,7 @@ import { CharacterWizard } from './CharacterWizard';
 import { Composer } from './Composer';
 import { ExportModal } from './ExportModal';
 import { MessageItem } from './MessageItem';
+import { NotesPanel } from './NotesPanel';
 import { ParticipantPanel } from './ParticipantPanel';
 import { deleteRoom, renameRoom } from './RoomList';
 import { RoomSettingsPanel } from './RoomSettingsPanel';
@@ -35,7 +37,7 @@ import { SheetPanel } from './SheetPanel';
 import { TrpgSettingsPanel } from './TrpgSettingsPanel';
 import { TrpgSetup } from './TrpgSetup';
 
-type Tab = 'participants' | 'settings' | 'sheet' | 'assistant' | 'trpg-settings';
+type Tab = 'participants' | 'settings' | 'sheet' | 'notes' | 'assistant' | 'trpg-settings';
 
 export function RoomView({
   roomId,
@@ -94,6 +96,10 @@ export function RoomView({
   const onRegenerate = useCallback((id: string) => void attempt(() => post(`${base}/messages/${id}/regenerate`)), [base]);
   const onRoll = useCallback((id: string) => attempt(() => post(`${base}/rolls/${id}/roll`)), [base]);
   const onPush = useCallback((id: string) => attempt(() => post(`${base}/rolls/${id}/push`)), [base]);
+  const onOpenNotes = useCallback(() => {
+    setTab('notes');
+    setPanelOpen(true);
+  }, []);
 
   if (!room) {
     return (
@@ -117,10 +123,11 @@ export function RoomView({
   if (runner?.picking) statusText = 'AI 主持人在选下一位…';
   else if (speaker) statusText = `${speaker.name} 正在${speaker.role === 'kp' ? '描述' : '发言'}…`;
 
-  const tabs: { key: Tab; label: string; icon: ReactNode }[] = trpg
+  const tabs: { key: Tab; label: string; title?: string; icon: ReactNode }[] = trpg
     ? [
         { key: 'sheet', label: '调查员', icon: <BookUser /> },
-        { key: 'assistant', label: '规则助手', icon: <GraduationCap /> },
+        { key: 'notes', label: t?.notes?.length ? `笔记 ${t.notes.length}` : '笔记', icon: <BookMarked /> },
+        { key: 'assistant', label: '助手', title: '规则助手：随时问规则', icon: <GraduationCap /> },
         { key: 'participants', label: 'AI', icon: <Users /> },
         { key: 'trpg-settings', label: '设置', icon: <Settings2 /> },
       ]
@@ -285,6 +292,7 @@ export function RoomView({
                   onRegenerate={onRegenerate}
                   onRoll={onRoll}
                   onPush={onPush}
+                  onOpenNotes={onOpenNotes}
                 />
               ))}
             </div>
@@ -306,7 +314,7 @@ export function RoomView({
         <aside className="room-panel">
           <div className="tabs">
             {tabs.map((x) => (
-              <button key={x.key} className={activeTab === x.key ? 'active' : ''} onClick={() => setTab(x.key)}>
+              <button key={x.key} className={activeTab === x.key ? 'active' : ''} onClick={() => setTab(x.key)} title={x.title}>
                 {x.icon}
                 {x.label}
               </button>
@@ -315,6 +323,7 @@ export function RoomView({
           {activeTab === 'participants' && <ParticipantPanel room={room} runner={runner} />}
           {activeTab === 'settings' && <RoomSettingsPanel room={room} />}
           {activeTab === 'sheet' && trpg && <SheetPanel room={room} onCreate={() => setWizard(true)} />}
+          {activeTab === 'notes' && trpg && <NotesPanel room={room} />}
           {activeTab === 'assistant' && trpg && <AssistantPanel room={room} />}
           {activeTab === 'trpg-settings' && trpg && <TrpgSettingsPanel room={room} />}
         </aside>

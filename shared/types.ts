@@ -1,6 +1,6 @@
 // 前后端共用的数据类型
 
-import type { InvestigatorSheet, RollRecord, TrpgState } from './coc.ts';
+import type { InvestigatorSheet, NoteEntry, NoteEvent, RollRecord, TrpgState } from './coc.ts';
 
 export type ParticipantRole = 'kp' | 'player';
 
@@ -89,10 +89,14 @@ export interface Message {
   createdAt: number;
   /** 跑团：玩家的场外发言 */
   ooc?: boolean;
-  /** 跑团：系统消息的种类 */
-  kind?: 'roll';
+  /** 跑团：系统消息的种类（骰子 / 笔记提示） */
+  kind?: 'roll' | 'note';
   /** 跑团：骰子 / 数值变化记录 */
   roll?: RollRecord;
+  /** 跑团：守秘人记下的笔记 */
+  note?: NoteEvent;
+  /** 生成这条消息时，因为上下文太长而没有发给模型的早期消息条数 */
+  trimmed?: number;
 }
 
 export interface Room {
@@ -177,6 +181,8 @@ export interface TrpgCreateOptions {
   teammateModel: string;
   teachingMode: boolean;
   autoRoll: boolean;
+  /** 守秘人笔记 */
+  notebook?: boolean;
   humanName: string;
 }
 
@@ -220,4 +226,4 @@ export const effortLabel = (effort?: string) => (effort ? (EFFORT_LABELS[effort]
 /** 用于排序的思考强度顺序 */
 export const EFFORT_ORDER = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
 
-export type { InvestigatorSheet, RollRecord, TrpgState };
+export type { InvestigatorSheet, NoteEntry, NoteEvent, RollRecord, TrpgState };

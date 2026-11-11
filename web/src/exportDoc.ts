@@ -43,8 +43,8 @@ export function toMarkdown(room: Room, messages: Message[], o: ExportOptions) {
   }
   lines.push('---', '');
   for (const m of messages) {
-    if (m.kind === 'roll') {
-      if (o.rolls) lines.push(`> 🎲 ${m.content}`, '');
+    if (m.kind === 'roll' || m.kind === 'note') {
+      if (o.rolls) lines.push(`> ${m.kind === 'note' ? '📒' : '🎲'} ${m.content}`, '');
       continue;
     }
     const text = displayContent(room, m);
@@ -68,8 +68,8 @@ export function toMarkdown(room: Room, messages: Message[], o: ExportOptions) {
 export function toPlainText(room: Room, messages: Message[], o: ExportOptions) {
   const out = [`【${room.title}】`, ''];
   for (const m of messages) {
-    if (m.kind === 'roll') {
-      if (o.rolls) out.push(`🎲 ${m.content}`, '');
+    if (m.kind === 'roll' || m.kind === 'note') {
+      if (o.rolls) out.push(`${m.kind === 'note' ? '📒' : '🎲'} ${m.content}`, '');
       continue;
     }
     const text = displayContent(room, m);

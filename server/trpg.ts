@@ -2,8 +2,12 @@
 
 import {
   COMMAND_RE,
+  NOTE_KIND_LABELS,
   type Difficulty,
   type InvestigatorSheet,
+  type NoteEntry,
+  type NoteEvent,
+  type NoteKind,
   type Rng,
   type RollRecord,
   meetsDifficulty,
@@ -18,6 +22,7 @@ import {
 import type { Message, Participant, Room } from '../shared/types.ts';
 import type { ChatMessage } from './llm.ts';
 import { turnBuilder, usableHistory } from './prompt.ts';
+import { newId } from './store.ts';
 
 // ---------------- 角色识别 ----------------
 
@@ -56,22 +61,18 @@ const RULES_CHEATSHEET = `COC 7 规则要点：
 - 生命值（HP）：受伤会扣除；一次失去最大生命值一半以上是重伤；归零会昏迷或濒死。急救成功可以恢复 1 点。
 - 调查员是普通人，不是超级英雄；遇到怪物时逃跑往往是明智的选择。`;
 
-function roster(room: Room) {
+/** 系统提示里的人物介绍：只有名字和职业，不含会变的数值（数值放在【当前状态】里） */
+function rosterNames(room: Room) {
   const trpg = room.trpg!;
-  const lines: string[] = [];
   const player = trpg.sheets.player;
-  lines.push(
+  const lines = [
     player
-      ? `- 人类玩家「${room.settings.humanName}」扮演调查员：\n${indent(sheetSummary(player, trpg.era))}`
-      : `- 人类玩家「${room.settings.humanName}」（还没有创建调查员）`,
-  );
+      ? `- 人类玩家「${room.settings.humanName}」，扮演调查员「${player.name}」（${player.occupation}）。TA 是第一次玩跑团的新手。`
+      : `- 人类玩家「${room.settings.humanName}」（还没有创建调查员），是第一次玩跑团的新手。`,
+  ];
   for (const p of teammatesOf(room)) {
     const sheet = trpg.sheets[p.id];
-    lines.push(
-      sheet
-        ? `- AI 队友（由另一个 AI 扮演）：\n${indent(sheetSummary(sheet, trpg.era))}`
-        : `- AI 队友「${p.name}」`,
-    );
+    lines.push(`- AI 队友「${sheet?.name ?? p.name}」${sheet ? `（${sheet.occupation}）` : ''}，由另一个 AI 扮演。`);
   }
   return lines.join('\n');
 }
@@ -82,13 +83,49 @@ const indent = (s: string) =>
     .map((l) => `  ${l}`)
     .join('\n');
 
+/** 笔记内容（玩家可见） */
+export function notesText(notes: NoteEntry[]) {
+  if (notes.length === 0) return '（还是空的）';
+  const section = (kind: NoteKind, label: string) => {
+    const list = notes.filter((n) => n.kind === kind);
+    return list.length ? `${label}：\n${list.map((n) => `- ${n.title}：${n.text}`).join('\n')}` : '';
+  };
+  return [section('npc', 'NPC'), section('clue', '线索')].filter(Boolean).join('\n');
+}
+
+/**
+ * 会变的状态（调查员数值、物品、笔记）。放在最后一条消息的末尾而不是系统提示里：
+ * 这样系统提示和之前的历史在每一轮都保持不变，模型服务的提示缓存才能生效。
+ */
+export function kpStateBlock(room: Room) {
+  const trpg = room.trpg!;
+  const lines = ['【当前状态】（程序自动更新，数值以这里为准）'];
+  const player = trpg.sheets.player;
+  if (player) lines.push(`玩家的调查员：\n${indent(sheetSummary(player, trpg.era))}`);
+  for (const p of teammatesOf(room)) {
+    const sheet = trpg.sheets[p.id];
+    if (sheet) lines.push(`AI 队友：\n${indent(sheetSummary(sheet, trpg.era))}`);
+  }
+  if (trpg.notebook) lines.push(`守秘人笔记（玩家也能看到）：\n${indent(notesText(trpg.notes))}`);
+  return lines.join('\n');
+}
+
+const NOTEBOOK_RULES = `【守秘人笔记】
+你有一本笔记，用来记下重要的 NPC 和线索，帮你在很长的游戏里保持前后一致。注意：这本笔记会显示在玩家的界面上，玩家随时可以翻看。
+- [NPC:名字:简短描述]：记下一个新登场的重要 NPC，或者更新已有 NPC 的信息（同名会覆盖）。写外貌、身份、态度，以及玩家已经知道的事。
+- [线索:简短标题:内容]：记下玩家刚刚发现或确认的关键线索。
+笔记规则：
+- 只记玩家已经亲眼看到、亲耳听到或者已经推理出来的内容。剧本真相、NPC 的隐藏身份和真实动机、玩家还没发现的秘密，一律不能写进笔记。
+- 只在重要 NPC 第一次登场、NPC 有了重要的新信息，或者发现关键线索时记录；一条消息里最多记一两条，不要什么都记。
+- 指令写在消息末尾即可。玩家看不到指令本身，只会看到"笔记已更新"的提示。`;
+
 export function buildKpSystemPrompt(room: Room, kp: Participant) {
   const trpg = room.trpg!;
   const parts = [
     '你是这场《克苏鲁的呼唤》第七版（COC 7th）跑团的守秘人（KP）：负责主持游戏、描述环境、扮演所有 NPC，并按规则裁定结果。',
     kp.persona.trim() ? `\n【你的主持风格】\n${kp.persona.trim()}` : '',
-    `\n【玩家与调查员】（数值随游戏实时更新）\n${roster(room)}`,
-    `人类玩家是第一次玩跑团的新手。`,
+    `\n【玩家】\n${rosterNames(room)}`,
+    `每一轮最后一条消息的末尾会附上【当前状态】：调查员最新的数值、技能和物品${trpg.notebook ? '，以及守秘人笔记' : ''}。以那里的内容为准。`,
     `\n${trpg.scenarioSecret}`,
     `\n【主持原则】
 - 用第二人称（"你"）生动地描述场景和 NPC 的言行，一般 150~300 字，结尾把选择交还给玩家（比如"你打算怎么做？"）。
@@ -113,6 +150,7 @@ export function buildKpSystemPrompt(room: Room, kp: Participant) {
 - 只在结果不确定、而且成败都有意义时才要求检定。一次只要求一个检定（理智检定除外），把指令写在消息末尾，然后停下来等结果，不要提前描述检定的结果。
 - 收到【骰子】结果后，根据成功等级描述后果。失败也要让剧情推进（付出代价、引来麻烦、浪费时间），不要只说"什么都没发现"。
 - 玩家可以对失败的普通技能检定"孤注一掷"重骰一次；孤注一掷再失败时，要给出严重的后果。`,
+    trpg.notebook ? `\n${NOTEBOOK_RULES}` : '',
   ];
   return parts.filter(Boolean).join('\n');
 }
@@ -136,6 +174,7 @@ export function buildKpMessages(room: Room, kp: Participant, history: Message[])
     } else if (m.kind === 'roll') {
       push('user', `【骰子】：${m.content.trim()}`);
     }
+    // 笔记提示（kind === 'note'）只给界面看，笔记本身在【当前状态】里
   }
   if (turns.length === 0) {
     turns.push({
@@ -146,6 +185,7 @@ export function buildKpMessages(room: Room, kp: Participant, history: Message[])
     if (turns[0].role === 'assistant') turns.unshift({ role: 'user', content: '（游戏开始）' });
     if (turns[turns.length - 1].role === 'assistant') turns.push({ role: 'user', content: '（请继续主持）' });
   }
+  turns[turns.length - 1].content += `\n\n${kpStateBlock(room)}`;
   return [{ role: 'system', content: buildKpSystemPrompt(room, kp) }, ...turns];
 }
 
@@ -153,10 +193,11 @@ export function buildTeammateMessages(room: Room, self: Participant, history: Me
   const trpg = room.trpg!;
   const kp = kpOf(room);
   const sheet = trpg.sheets[self.id];
+  const name = sheet?.name ?? self.name;
   const system = [
-    `你在一场《克苏鲁的呼唤》（COC 7）跑团中扮演 AI 调查员「${sheet?.name ?? self.name}」，和人类玩家「${room.settings.humanName}」（扮演调查员「${playerName(room)}」）一起调查。守秘人负责描述世界和裁定结果。`,
+    `你在一场《克苏鲁的呼唤》（COC 7）跑团中扮演 AI 调查员「${name}」${sheet ? `（${sheet.occupation}）` : ''}，和人类玩家「${room.settings.humanName}」（扮演调查员「${playerName(room)}」）一起调查。守秘人负责描述世界和裁定结果。`,
     self.persona.trim() ? `\n【你的性格】\n${self.persona.trim()}` : '',
-    sheet ? `\n【你的调查员】\n${sheetSummary(sheet, trpg.era)}` : '',
+    `\n每一轮最后一条消息的末尾会附上你的调查员的最新状态${trpg.notebook ? '和大家共享的调查笔记' : ''}。`,
     `\n【原则】
 - 用第一人称说出你的调查员的台词和行动，简短（一般 30~100 字）。
 - 只描述你想做什么、说什么，不要描述行动的结果，不要扮演 NPC 或守秘人，也不要编造骰子结果。
@@ -174,15 +215,22 @@ export function buildTeammateMessages(room: Room, self: Participant, history: Me
   }
   if (turns.length === 0 || turns[0].role === 'assistant') turns.unshift({ role: 'user', content: '（游戏开始）' });
   if (turns[turns.length - 1].role === 'assistant') turns.push({ role: 'user', content: '（请继续）' });
-  turns[turns.length - 1].content += `\n\n（现在轮到你「${sheet?.name ?? self.name}」，简短说出你的台词或行动）`;
+  const state = [
+    sheet ? `【你的调查员当前状态】\n${sheetSummary(sheet, trpg.era)}` : '',
+    trpg.notebook && trpg.notes.length ? `【调查笔记】\n${notesText(trpg.notes)}` : '',
+  ]
+    .filter(Boolean)
+    .join('\n\n');
+  turns[turns.length - 1].content += `${state ? `\n\n${state}` : ''}\n\n（现在轮到你「${name}」，简短说出你的台词或行动）`;
   return [{ role: 'system', content: system.join('\n') }, ...turns];
 }
 
-/** 规则助手：能看到局势和角色卡，但看不到剧本秘密 */
+/** 规则助手：能看到局势、角色卡和笔记（都是玩家可见的），但看不到剧本秘密 */
 export function buildAssistantMessages(room: Room, question: string, mode: 'ask' | 'suggest'): ChatMessage[] {
   const trpg = room.trpg!;
   const kp = kpOf(room);
   const transcript = usableHistory(room.messages)
+    .filter((m) => m.kind !== 'note')
     .slice(-24)
     .map((m) => {
       if (m.role === 'human') return `${m.ooc ? `玩家（场外）` : playerName(room)}：${m.content.trim()}`;
@@ -193,12 +241,15 @@ export function buildAssistantMessages(room: Room, question: string, mode: 'ask'
     .join('\n');
   const system = [
     '你是《克苏鲁的呼唤》第七版跑团的规则助手，陪伴一位完全不懂跑团的新手玩家。用通俗、亲切的中文回答，一般不超过 200 字，必要时举例子。',
-    '你能看到游戏记录和玩家的调查员卡，但看不到剧本秘密，也不要猜测或剧透剧情的真相。你不是守秘人，不能替守秘人裁定结果。',
+    '你能看到游戏记录、玩家的调查员卡和调查笔记，但看不到剧本秘密，也不要猜测或剧透剧情的真相。你不是守秘人，不能替守秘人裁定结果。',
     `\n${RULES_CHEATSHEET}`,
     trpg.sheets.player ? `\n【玩家的调查员】\n${sheetSummary(trpg.sheets.player, trpg.era)}` : '\n（玩家还没有创建调查员）',
     `\n【剧本简介】${trpg.scenarioIntro}`,
+    trpg.notebook && trpg.notes.length ? `\n【调查笔记】\n${notesText(trpg.notes)}` : '',
     `\n【最近的游戏记录】\n${transcript || '（游戏还没开始）'}`,
-  ].join('\n');
+  ]
+    .filter(Boolean)
+    .join('\n');
 
   if (mode === 'suggest') {
     return [
@@ -301,6 +352,8 @@ function applyStat(sheet: InvestigatorSheet, stat: StatName, delta: number) {
 
 export interface ProcessResult {
   rolls: RollRecord[];
+  /** 新记下或更新的笔记 */
+  notes: NoteEvent[];
   /** 有需要守秘人看到结果再继续的自动掷骰 */
   needContinue: boolean;
   /** 等待人类玩家掷骰的数量 */
@@ -312,7 +365,7 @@ export interface ProcessResult {
 /** 解析守秘人消息里的指令，生成骰子记录（会直接修改角色卡） */
 export function processKpCommands(room: Room, text: string, rng: Rng = Math.random): ProcessResult {
   const trpg = room.trpg!;
-  const result: ProcessResult = { rolls: [], needContinue: false, pendingHuman: 0, sheetsChanged: false, problems: [] };
+  const result: ProcessResult = { rolls: [], notes: [], needContinue: false, pendingHuman: 0, sheetsChanged: false, problems: [] };
   const seen = new Set<string>();
 
   for (const m of text.matchAll(COMMAND_RE)) {
@@ -328,6 +381,25 @@ export function processKpCommands(room: Room, text: string, rng: Rng = Math.rand
     const plain = args.filter((a) => !a.startsWith('@'));
     const key = actorKey(room, mention);
     const sheet = key ? trpg.sheets[key] : undefined;
+
+    if (kind === 'NPC' || kind === '线索') {
+      if (!trpg.notebook) continue; // 笔记关闭时忽略（指令仍然会从显示里去掉）
+      const parts = args.map((a) => a.replace(/^@/, ''));
+      let title: string;
+      let body: string;
+      if (parts.length >= 2) {
+        title = parts[0];
+        body = parts.slice(1).join('：');
+      } else if (kind === '线索' && parts[0]) {
+        body = parts[0];
+        title = body.length > 14 ? `${body.slice(0, 14)}…` : body;
+      } else {
+        continue; // NPC 没有描述
+      }
+      const ev = upsertNote(trpg.notes, kind === 'NPC' ? 'npc' : 'clue', title, body);
+      if (ev) result.notes.push(ev);
+      continue;
+    }
 
     if (kind === '掷骰') {
       try {
@@ -471,6 +543,42 @@ export function processKpCommands(room: Room, text: string, rng: Rng = Math.rand
     }
   }
   return result;
+}
+
+/** 记下或更新一条笔记；内容没变化时返回 undefined */
+export function upsertNote(notes: NoteEntry[], kind: NoteKind, rawTitle: string, rawText: string): NoteEvent | undefined {
+  const title = rawTitle.trim().slice(0, 40);
+  const text = rawText.trim().slice(0, 400);
+  if (!title || !text) return undefined;
+  const now = Date.now();
+  const existing = notes.find((n) => n.kind === kind && n.title.toLowerCase() === title.toLowerCase());
+  if (existing) {
+    if (existing.text === text) return undefined;
+    existing.text = text;
+    existing.updatedAt = now;
+    return { noteId: existing.id, kind, title: existing.title, text, updated: true };
+  }
+  const entry: NoteEntry = { id: newId(), kind, title, text, createdAt: now, updatedAt: now };
+  notes.push(entry);
+  return { noteId: entry.id, kind, title, text, updated: false };
+}
+
+export function noteText(ev: NoteEvent) {
+  return `守秘人${ev.updated ? '更新了' : '记下了'}${NOTE_KIND_LABELS[ev.kind]}「${ev.title}」：${ev.text}`;
+}
+
+/** 主对话里「笔记已更新」的提示消息 */
+export function noteMessage(id: string, ev: NoteEvent): Message {
+  return {
+    id,
+    role: 'system',
+    kind: 'note',
+    speakerName: '笔记',
+    content: noteText(ev),
+    note: ev,
+    status: 'done',
+    createdAt: Date.now(),
+  };
 }
 
 /** 生成一条骰子消息 */
