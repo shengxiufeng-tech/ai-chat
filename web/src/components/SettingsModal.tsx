@@ -4,6 +4,7 @@ import type { AppSettings } from '../../../shared/types';
 import { get, put } from '../api';
 import { reloadModels } from '../models';
 import { attempt } from '../toast';
+import { CacheDiagnostics } from './CacheDiagnostics';
 import { Modal } from './Modal';
 import { ModelInput } from './ModelInput';
 import { Field } from './ui';
@@ -75,6 +76,8 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
             <span>{testResult.text}</span>
           </div>
         )}
+        <div className="divider" />
+        <CacheDiagnostics defaultModel={s.defaultModel} />
       </div>
     </Modal>
   );

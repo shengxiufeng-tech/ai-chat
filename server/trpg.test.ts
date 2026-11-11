@@ -342,3 +342,51 @@ test('秘密备忘：只有守秘人能看到，队友、规则助手和显示�
 test('即兴剧本要求守秘人第一次回复就把真相记进备忘', () => {
   assert.match(improvScenario('海边灯塔', 'modern').secret, /\[备忘:真相:/);
 });
+
+/** 第 N+1 次请求是否以第 N 次请求为前缀（只有第 N 次的最后一条消息末尾的状态 / 提醒可以不同） */
+function assertSharedPrefix(prev: { role: string; content: string }[], next: { role: string; content: string }[]) {
+  assert.ok(next.length >= prev.length, '请求变短了');
+  for (let i = 0; i < prev.length - 1; i++) assert.deepEqual(next[i], prev[i], `第 ${i} 条消息变了，缓存会失效`);
+  const lastPrev = prev.at(-1)!;
+  const sameSlot = next[prev.length - 1];
+  assert.equal(sameSlot.role, lastPrev.role);
+  // 上一次最后一条 = 历史 + 状态/提醒；这一次同一位置 = 同样的历史（+ 可能合并进来的新消息）
+  const history = lastPrev.content.split('\n\n【当前状态】')[0].split('\n\n（现在轮到你')[0].split('\n\n【你的调查员当前状态】')[0];
+  assert.ok(sameSlot.content.startsWith(history), '上一次最后一条消息的历史部分变了');
+}
+
+test('缓存友好：同一个 AI 连续两次请求共享前缀（守秘人、队友、多人对话）', async () => {
+  const { buildAgentMessages } = await import('./prompt.ts');
+  const room = trpgRoom();
+  const kp = room.participants[0];
+  const mate = room.participants[1];
+  room.messages = [
+    msg({ role: 'ai', participantId: 'kp', speakerName: '守秘人', content: '你来到茶馆。[NPC:周婶:茶馆老板娘]' }),
+    msg({ role: 'ai', participantId: 'mate', speakerName: '林薇', content: '我四处看看。' }),
+    msg({ role: 'human', content: '我找老板娘聊天', speakerName: '小明' }),
+  ];
+  const kp1 = buildKpMessages(room, kp, room.messages);
+  const mate1 = buildTeammateMessages(room, mate, room.messages);
+  // 守秘人回应、数值变化、记下笔记，然后队友和玩家各说一句
+  processKpCommands(room, '[HP:-1] [线索:老板娘很害怕:她不敢提陆家]');
+  room.messages.push(
+    msg({ role: 'ai', participantId: 'kp', speakerName: '守秘人', content: '周婶压低声音……' }),
+    msg({ role: 'ai', participantId: 'mate', speakerName: '林薇', content: '我递给她一块银元。' }),
+    msg({ role: 'human', content: '我问她井的事', speakerName: '小明' }),
+  );
+  assertSharedPrefix(kp1, buildKpMessages(room, kp, room.messages));
+  assertSharedPrefix(mate1, buildTeammateMessages(room, mate, room.messages));
+
+  // 多人对话模式
+  const chat = { ...trpgRoom(), mode: 'chat' as const, trpg: undefined };
+  const a = part('a', '苏格拉');
+  const b = part('b', '居里');
+  chat.participants = [a, b];
+  chat.messages = [msg({ role: 'human', content: '聊聊 AI', speakerName: '我' }), msg({ role: 'ai', participantId: 'a', speakerName: '苏格拉', content: '先定义 AI。' })];
+  const b1 = buildAgentMessages(chat, b, chat.messages);
+  chat.messages.push(
+    msg({ role: 'ai', participantId: 'b', speakerName: '居里', content: '我们看数据。' }),
+    msg({ role: 'ai', participantId: 'a', speakerName: '苏格拉', content: '数据是什么？' }),
+  );
+  assertSharedPrefix(b1, buildAgentMessages(chat, b, chat.messages));
+});

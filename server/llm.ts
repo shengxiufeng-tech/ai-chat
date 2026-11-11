@@ -1,6 +1,7 @@
 // OpenAI 兼容接口的流式调用（Magpie、各家 API、本地模型都能用）
 
-import type { ModelInfo } from '../shared/types.ts';
+import type { ModelInfo, TokenUsage } from '../shared/types.ts';
+import { estimateTokens } from './context.ts';
 
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant';
@@ -16,12 +17,42 @@ export interface ChatOptions {
   maxTokens?: number;
   /** 思考强度，作为 reasoning_effort 发送；空则不发送 */
   reasoningEffort?: string;
+  /**
+   * 会话 id，作为 X-Magpie-Session 发送。Magpie 靠它认出同一段对话，把后续请求留在同一个账号上，
+   * 服务商那边缓存的提示词才能被复用。
+   */
+  sessionId?: string;
   signal?: AbortSignal;
 }
 
 export interface ChatChunk {
   content?: string;
   reasoning?: string;
+  usage?: TokenUsage;
+}
+
+/** 不接受 stream_options 的服务（报错过一次就记住，之后不再发送） */
+const noStreamOptions = new Set<string>();
+
+/** 把各家的 usage 字段统一起来：OpenAI、DeepSeek、Anthropic 风格都认 */
+export function parseUsage(u: any): TokenUsage | undefined {
+  if (!u || typeof u !== 'object') return undefined;
+  const num = (...vals: unknown[]) => vals.find((v): v is number => typeof v === 'number' && Number.isFinite(v));
+  const input = num(u.prompt_tokens, u.input_tokens);
+  const output = num(u.completion_tokens, u.output_tokens);
+  if (input === undefined && output === undefined) return undefined;
+  const usage: TokenUsage = { input: input ?? 0, output: output ?? 0 };
+  const cached = num(
+    u.prompt_tokens_details?.cached_tokens,
+    u.prompt_cache_hit_tokens,
+    u.cache_read_input_tokens,
+    u.input_tokens_details?.cached_tokens,
+    u.cached_tokens,
+  );
+  if (cached !== undefined) usage.cached = cached;
+  const reasoning = num(u.completion_tokens_details?.reasoning_tokens, u.output_tokens_details?.reasoning_tokens);
+  if (reasoning !== undefined) usage.reasoning = reasoning;
+  return usage;
 }
 
 const USER_AGENT = 'ai-chat/0.1';
@@ -136,21 +167,37 @@ export async function* streamChat(opts: ChatOptions): AsyncGenerator<ChatChunk> 
   if (opts.temperature !== undefined) body.temperature = opts.temperature;
   if (opts.maxTokens !== undefined) body.max_tokens = opts.maxTokens;
   if (opts.reasoningEffort) body.reasoning_effort = opts.reasoningEffort;
+  // 请服务商在流的最后报告用量（包括缓存命中），否则很多服务在流式输出时根本不报
+  const baseKey = opts.baseUrl.trim();
+  if (!noStreamOptions.has(baseKey)) body.stream_options = { include_usage: true };
 
-  let res: Response;
-  try {
-    res = await fetch(endpoint(opts.baseUrl, '/chat/completions'), {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${opts.apiKey || 'magpie-ai-chat'}`,
-        'User-Agent': USER_AGENT,
-      },
-      body: JSON.stringify(body),
-      signal: opts.signal,
-    });
-  } catch (err) {
-    throw describeFetchError(err, opts.baseUrl);
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    Authorization: `Bearer ${opts.apiKey || 'magpie-ai-chat'}`,
+    'User-Agent': USER_AGENT,
+  };
+  if (opts.sessionId) headers['X-Magpie-Session'] = opts.sessionId;
+
+  const send = async () => {
+    try {
+      return await fetch(endpoint(opts.baseUrl, '/chat/completions'), {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+        signal: opts.signal,
+      });
+    } catch (err) {
+      throw describeFetchError(err, opts.baseUrl);
+    }
+  };
+  let res = await send();
+  if (!res.ok && res.status === 400 && body.stream_options) {
+    const err = await readError(res);
+    if (!/stream_options|include_usage/i.test(err.message)) throw err;
+    // 这个服务不认 stream_options：记住它，去掉后重发
+    noStreamOptions.add(baseKey);
+    delete body.stream_options;
+    res = await send();
   }
   if (!res.ok) throw await readError(res);
 
@@ -167,6 +214,8 @@ export async function* streamChat(opts: ChatOptions): AsyncGenerator<ChatChunk> 
       yield splitter.push(msg.content);
       yield splitter.flush();
     }
+    const usage = parseUsage(json?.usage);
+    if (usage) yield { usage };
     return;
   }
 
@@ -191,6 +240,8 @@ export async function* streamChat(opts: ChatOptions): AsyncGenerator<ChatChunk> 
     }
     const delta = json?.choices?.[0]?.delta ?? {};
     const out: ChatChunk = {};
+    const usage = parseUsage(json?.usage);
+    if (usage) out.usage = usage;
     const reasoning = delta.reasoning_content ?? delta.reasoning;
     if (typeof reasoning === 'string' && reasoning) out.reasoning = reasoning;
     if (typeof delta.content === 'string' && delta.content) {
@@ -198,7 +249,7 @@ export async function* streamChat(opts: ChatOptions): AsyncGenerator<ChatChunk> 
       if (split.content) out.content = split.content;
       if (split.reasoning) out.reasoning = (out.reasoning ?? '') + split.reasoning;
     }
-    return out.content || out.reasoning ? out : null;
+    return out.content || out.reasoning || out.usage ? out : null;
   };
 
   try {
@@ -236,11 +287,17 @@ export async function* streamChat(opts: ChatOptions): AsyncGenerator<ChatChunk> 
 
 /** 非流式：把流拼起来返回正文 */
 export async function completeChat(opts: ChatOptions): Promise<string> {
+  return (await completeChatWithUsage(opts)).text;
+}
+
+export async function completeChatWithUsage(opts: ChatOptions): Promise<{ text: string; usage?: TokenUsage }> {
   let text = '';
+  let usage: TokenUsage | undefined;
   for await (const chunk of streamChat(opts)) {
     if (chunk.content) text += chunk.content;
+    if (chunk.usage) usage = chunk.usage;
   }
-  return text;
+  return { text, usage };
 }
 
 /** 读取模型列表 */
@@ -347,7 +404,21 @@ const MOCK_LINES = [
   '举个具体的例子也许更好理解。',
 ];
 
+const mockLastPrompt = new Map<string, string>();
+
 async function* mockStream(opts: ChatOptions): AsyncGenerator<ChatChunk> {
+  yield* mockReply(opts);
+  const prompt = opts.messages.map((m) => `<${m.role}>${m.content}`).join('\n');
+  const key = opts.sessionId ?? '';
+  const prev = mockLastPrompt.get(key) ?? '';
+  mockLastPrompt.set(key, prompt);
+  let common = 0;
+  while (common < prev.length && common < prompt.length && prev[common] === prompt[common]) common++;
+  const input = estimateTokens(prompt);
+  yield { usage: { input, output: 60, cached: key ? Math.floor(estimateTokens(prompt.slice(0, common)) / 64) * 64 : 0 } };
+}
+
+async function* mockReply(opts: ChatOptions): AsyncGenerator<ChatChunk> {
   const system = opts.messages.find((m) => m.role === 'system')?.content ?? '';
   const name = system.match(/你是「([^」]+)」/)?.[1];
   const last = [...opts.messages].reverse().find((m) => m.role === 'user')?.content ?? '';

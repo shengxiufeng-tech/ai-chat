@@ -140,3 +140,88 @@ test('读取模型列表（Magpie 的 display_name）', async () => {
     },
   );
 });
+
+test('解析各家的用量字段（含缓存命中）', async () => {
+  const { parseUsage } = await import('./llm.ts');
+  assert.deepEqual(parseUsage({ prompt_tokens: 1000, completion_tokens: 50, prompt_tokens_details: { cached_tokens: 768 } }), {
+    input: 1000,
+    output: 50,
+    cached: 768,
+  });
+  // DeepSeek
+  assert.deepEqual(parseUsage({ prompt_tokens: 900, completion_tokens: 20, prompt_cache_hit_tokens: 640, prompt_cache_miss_tokens: 260 }), {
+    input: 900,
+    output: 20,
+    cached: 640,
+  });
+  // Anthropic 风格 + 思考 token
+  assert.deepEqual(
+    parseUsage({ input_tokens: 500, output_tokens: 80, cache_read_input_tokens: 0, output_tokens_details: { reasoning_tokens: 30 } }),
+    { input: 500, output: 80, cached: 0, reasoning: 30 },
+  );
+  // 没有缓存字段时 cached 为 undefined（和「命中 0」区分开）
+  assert.deepEqual(parseUsage({ prompt_tokens: 10, completion_tokens: 2 }), { input: 10, output: 2 });
+  assert.equal(parseUsage(null), undefined);
+});
+
+test('发送会话 id 和 stream_options，并读出流最后的用量', async () => {
+  let headers: http.IncomingHttpHeaders = {};
+  let body: any;
+  await withServer(
+    (req, res) => {
+      headers = req.headers;
+      let raw = '';
+      req.on('data', (c) => (raw += c));
+      req.on('end', () => {
+        body = JSON.parse(raw);
+        res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+        res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: '好' } }] })}\n\n`);
+        res.write(`data: ${JSON.stringify({ choices: [], usage: { prompt_tokens: 2000, completion_tokens: 1, prompt_tokens_details: { cached_tokens: 1920 } } })}\n\n`);
+        res.end('data: [DONE]\n\n');
+      });
+    },
+    async (baseUrl) => {
+      const chunks: ChatChunk[] = [];
+      for await (const c of streamChat({ baseUrl, apiKey: 'k', model: 'm', messages: [{ role: 'user', content: 'hi' }], sessionId: 'ai-chat-r1-p1' })) {
+        chunks.push(c);
+      }
+      assert.equal(headers['x-magpie-session'], 'ai-chat-r1-p1');
+      assert.deepEqual(body.stream_options, { include_usage: true });
+      assert.deepEqual(chunks.find((c) => c.usage)?.usage, { input: 2000, output: 1, cached: 1920 });
+    },
+  );
+});
+
+test('服务不认 stream_options 时自动去掉重发，之后也不再发送', async () => {
+  const bodies: any[] = [];
+  await withServer(
+    (req, res) => {
+      let raw = '';
+      req.on('data', (c) => (raw += c));
+      req.on('end', () => {
+        const b = JSON.parse(raw);
+        bodies.push(b);
+        if (b.stream_options) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: { message: 'Unrecognized request argument supplied: stream_options' } }));
+          return;
+        }
+        res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+        res.end(`data: ${JSON.stringify({ choices: [{ delta: { content: 'ok' } }] })}\n\ndata: [DONE]\n\n`);
+      });
+    },
+    async (baseUrl) => {
+      const run = async () => {
+        let text = '';
+        for await (const c of streamChat({ baseUrl, apiKey: '', model: 'm', messages: [{ role: 'user', content: 'hi' }] })) text += c.content ?? '';
+        return text;
+      };
+      assert.equal(await run(), 'ok');
+      assert.equal(await run(), 'ok');
+      assert.deepEqual(
+        bodies.map((b) => !!b.stream_options),
+        [true, false, false],
+      );
+    },
+  );
+});

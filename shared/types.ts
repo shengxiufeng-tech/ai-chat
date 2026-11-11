@@ -99,6 +99,8 @@ export interface Message {
   trimmed?: number;
   /** 模型替别人写的发言，已经从正文里去掉（保留在这里供查看） */
   filtered?: string;
+  /** 这次请求的 token 用量（服务商报告了才有） */
+  usage?: TokenUsage;
 }
 
 export interface Room {
@@ -114,6 +116,16 @@ export interface Room {
   trpg?: TrpgState;
   createdAt: number;
   updatedAt: number;
+}
+
+/** 一次请求的 token 用量 */
+export interface TokenUsage {
+  input: number;
+  output: number;
+  /** 输入里命中缓存的部分；undefined 表示服务商没有报告缓存信息 */
+  cached?: number;
+  /** 输出里思考过程的部分 */
+  reasoning?: number;
 }
 
 export interface RoomSummary {

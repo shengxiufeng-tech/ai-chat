@@ -30,6 +30,9 @@ import { newId, type Store } from './store.ts';
 
 type Listener = (ev: RoomEvent) => void;
 
+/** 发给 Magpie 的会话 id：每个房间里的每个 AI 各一个，固定不变 */
+export const sessionIdFor = (roomId: string, who: string) => `ai-chat-${roomId}-${who}`;
+
 /** 队列里的一次发言请求：指定参与者，或交给规则自动选 */
 type TurnRequest = { participantId: string } | 'auto';
 
@@ -498,6 +501,7 @@ export class RoomRunner {
           model,
           messages: buildModeratorMessages(room),
           temperature: 0.3,
+          sessionId: sessionIdFor(room.id, 'moderator'),
           signal: AbortSignal.timeout(60000),
         });
         const choice = parseModeratorChoice(output, room);
@@ -589,9 +593,12 @@ export class RoomRunner {
         temperature: p.temperature,
         reasoningEffort: p.reasoningEffort || undefined,
         messages: fit.messages,
+        // 每个 AI 一个固定的会话 id：Magpie 会把它的请求留在同一个账号上，缓存才能命中
+        sessionId: sessionIdFor(room.id, p.id),
         signal: controller.signal,
       });
       for await (const chunk of stream) {
+        if (chunk.usage) message.usage = chunk.usage;
         if (chunk.content) message.content += chunk.content;
         if (chunk.reasoning) message.reasoning += chunk.reasoning;
         this.emit({

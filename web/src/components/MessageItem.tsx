@@ -1,10 +1,10 @@
-import { AlertCircle, BookMarked, Brain, Check, ChevronRight, Copy, Lightbulb, Pencil, RotateCcw, Scissors, Trash2, User, UserX } from 'lucide-react';
+import { AlertCircle, BookMarked, Brain, Check, ChevronRight, Copy, Lightbulb, Pencil, RotateCcw, Scissors, Trash2, User, UserX, Zap } from 'lucide-react';
 import { memo, useState, type CSSProperties } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { stripCommands } from '../../../shared/coc';
 import { stripImpersonation } from '../../../shared/text';
-import { effortLabel, type Message } from '../../../shared/types';
+import { effortLabel, type Message, type TokenUsage } from '../../../shared/types';
 import { shortModel } from '../models';
 import { EffortMeter } from './EffortPicker';
 import { RollCard } from './RollCard';
@@ -30,6 +30,25 @@ export function splitTips(text: string) {
     .join('\n')
     .trim();
   return { body, tips };
+}
+
+const fmtTokens = (n: number) => (n >= 10_000 ? `${(n / 1000).toFixed(1)}k` : n.toLocaleString('en-US'));
+
+/** 这次请求的 token 用量和缓存命中率 */
+export function UsageTag({ usage }: { usage: TokenUsage }) {
+  const pct = usage.cached !== undefined && usage.input > 0 ? Math.round((usage.cached / usage.input) * 100) : undefined;
+  const title = [
+    `输入 ${usage.input.toLocaleString('en-US')} tokens`,
+    usage.cached !== undefined
+      ? `其中命中缓存 ${usage.cached.toLocaleString('en-US')}（${pct ?? 0}%）`
+      : '服务商没有报告缓存信息',
+    `输出 ${usage.output.toLocaleString('en-US')} tokens${usage.reasoning ? `（思考 ${usage.reasoning.toLocaleString('en-US')}）` : ''}`,
+  ].join('\n');
+  return (
+    <span className={`badge ${usage.cached ? 'badge-ok' : ''}`} title={title}>
+      <Zap /> {pct !== undefined ? `缓存 ${pct}%` : `${fmtTokens(usage.input)} tokens`}
+    </span>
+  );
 }
 
 export function ModelTag({ model, effort }: { model?: string; effort?: string }) {
@@ -134,6 +153,7 @@ export const MessageItem = memo(function MessageItem({
           </span>
           {isHuman && m.ooc && <span className="badge">场外</span>}
           <ModelTag model={m.model} effort={m.reasoningEffort} />
+          {m.usage && !streaming && <UsageTag usage={m.usage} />}
           <span className="msg-time">{time(m.createdAt)}</span>
           {m.status === 'interrupted' && <span className="badge badge-warn">被打断</span>}
           {!!m.filtered && (

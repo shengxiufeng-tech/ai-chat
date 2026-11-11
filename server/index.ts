@@ -13,9 +13,10 @@ import type {
   TrpgCreateOptions,
 } from '../shared/types.ts';
 import { DEFAULT_ROOM_SETTINGS } from '../shared/types.ts';
-import { completeChat, listModels, primeModelCache } from './llm.ts';
+import { estimateTokens } from './context.ts';
+import { completeChat, completeChatWithUsage, listModels, primeModelCache, type ChatMessage } from './llm.ts';
 import { BUILTIN_TEMPLATES, ROOM_PRESETS } from './presets.ts';
-import { RunnerManager } from './runner.ts';
+import { RunnerManager, sessionIdFor } from './runner.ts';
 import { BAISHUI, customScenario, improvScenario } from './scenarios.ts';
 import { newId, normalizeRoom, Store } from './store.ts';
 import { buildAssistantMessages, kpOf, parseSuggestions } from './trpg.ts';
@@ -142,6 +143,44 @@ app.get(
     } catch (err) {
       throw new HttpError(502, err instanceof Error ? err.message : String(err));
     }
+  }),
+);
+
+app.post(
+  '/api/diagnostics/cache',
+  h(async (req) => {
+    const s = store.getSettings();
+    const model = String(req.body?.model || s.defaultModel || '').trim();
+    if (!model) throw new HttpError(400, '请先选择要测试的模型');
+    // 一段足够长、内容固定的提示（约 5 千 token）：Gemini 等服务要求前缀至少 1~4 千 token 才会缓存
+    const system = `你是缓存测试助手。下面是一段固定的参考资料，请忽略它的内容，只按用户要求回复。\n\n${BAISHUI.secret}\n\n${BAISHUI.secret}`;
+    const messages: ChatMessage[] = [
+      { role: 'system', content: system },
+      { role: 'user', content: '这是一条缓存测试消息，请只回复一个字：好' },
+    ];
+    const sessionId = `ai-chat-diagnostics-${Date.now()}`;
+    const run = async () => {
+      const started = Date.now();
+      try {
+        const r = await completeChatWithUsage({
+          baseUrl: s.baseUrl,
+          apiKey: s.apiKey,
+          model,
+          messages,
+          sessionId,
+          signal: AbortSignal.timeout(120000),
+        });
+        return { ok: true, usage: r.usage ?? null, ms: Date.now() - started };
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err), ms: Date.now() - started };
+      }
+    };
+    const first = await run();
+    if (!first.ok) return { model, first, second: null };
+    // 等几秒：有的服务（比如 DeepSeek）在请求结束后才把缓存建好
+    await new Promise((r) => setTimeout(r, 3000));
+    const second = await run();
+    return { model, first, second, promptTokens: estimateTokens(system) };
   }),
 );
 
@@ -580,6 +619,7 @@ app.post(
         apiKey: settings.apiKey,
         model,
         temperature: 0.6,
+        sessionId: sessionIdFor(room.id, 'assistant'),
         messages: buildAssistantMessages(room, question, mode),
         signal: AbortSignal.timeout(120000),
       });
