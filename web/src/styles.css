@@ -812,10 +812,11 @@ kbd {
   padding-right: 24px;
 }
 
-.room-menu {
+/* 两个类名一起写，优先级高于后面的 .menu-list（它是 absolute + right: 0，会把菜单拉到屏幕右边） */
+.menu-list.room-menu {
   position: fixed;
-  top: auto;
   right: auto;
+  width: 180px;
   z-index: 60;
 }
 

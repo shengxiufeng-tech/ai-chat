@@ -235,7 +235,7 @@ function RoomMenu({
   // 靠近窗口底部时向上弹出
   const top = Math.min(y, window.innerHeight - 100);
   return (
-    <div ref={ref} className="menu-list room-menu" style={{ left: Math.max(8, x - 180), top }}>
+    <div ref={ref} className="menu-list room-menu" style={{ left: Math.max(8, x - 180), top }} role="menu">
       <button onClick={onRename}>
         <Pencil /> 重命名
       </button>
