@@ -3,21 +3,14 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Room, RoomMode, RoomSummary } from '../../shared/types';
 import { get, post } from './api';
 import { NewRoomModal } from './components/NewRoomModal';
+import { RoomList } from './components/RoomList';
 import { RoomView } from './components/RoomView';
 import { SettingsModal } from './components/SettingsModal';
 import { Segmented } from './components/ui';
+import { ConfirmHost } from './confirm';
 import { useModels } from './models';
 import { useTheme } from './theme';
 import { attempt, toast, Toaster } from './toast';
-
-function ago(ts: number) {
-  const s = (Date.now() - ts) / 1000;
-  if (s < 60) return '刚刚';
-  if (s < 3600) return `${Math.floor(s / 60)} 分钟前`;
-  if (s < 86400) return `${Math.floor(s / 3600)} 小时前`;
-  if (s < 86400 * 30) return `${Math.floor(s / 86400)} 天前`;
-  return new Date(ts).toLocaleDateString('zh-CN');
-}
 
 export default function App() {
   const [rooms, setRooms] = useState<RoomSummary[]>([]);
@@ -27,6 +20,10 @@ export default function App() {
   const [theme, setTheme] = useTheme();
   const models = useModels();
   const fileRef = useRef<HTMLInputElement>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
+  const [query, setQuery] = useState('');
+  const [results, setResults] = useState<RoomSummary[] | null>(null);
+  const [searching, setSearching] = useState(false);
 
   const loadRooms = useCallback(async () => {
     const list = await attempt(() => get<RoomSummary[]>('/rooms'));
@@ -38,6 +35,55 @@ export default function App() {
   useEffect(() => {
     void loadRooms();
   }, [loadRooms]);
+
+  // 搜索：输入停顿 200ms 后再查，避免每个字都请求
+  const runSearch = useCallback(async (q: string) => {
+    if (!q.trim()) {
+      setResults(null);
+      setSearching(false);
+      return;
+    }
+    const list = await attempt(() => get<RoomSummary[]>(`/rooms?q=${encodeURIComponent(q.trim())}`));
+    setResults(list ?? []);
+    setSearching(false);
+  }, []);
+  useEffect(() => {
+    if (!query.trim()) {
+      setResults(null);
+      return;
+    }
+    setSearching(true);
+    const t = setTimeout(() => void runSearch(query), 200);
+    return () => clearTimeout(t);
+  }, [query, runSearch]);
+
+  const refresh = useCallback(async () => {
+    await loadRooms();
+    if (query.trim()) await runSearch(query);
+  }, [loadRooms, runSearch, query]);
+
+  // Ctrl/⌘ + K 聚焦搜索框
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        searchRef.current?.focus();
+        searchRef.current?.select();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
+  const onRoomDeleted = (id: string) => {
+    if (id === selected) {
+      // 删除当前打开的房间后，切换到相邻的房间
+      const idx = rooms.findIndex((r) => r.id === id);
+      const next = rooms[idx + 1] ?? rooms[idx - 1];
+      setSelected(next && next.id !== id ? next.id : null);
+    }
+    void refresh();
+  };
 
   useEffect(() => {
     if (selected) localStorage.setItem('ai-chat:room', selected);
@@ -90,22 +136,17 @@ export default function App() {
             }}
           />
         </div>
-        <ul className="room-list">
-          {rooms.length > 0 && <li className="room-list-label">房间</li>}
-          {rooms.map((r) => (
-            <li key={r.id}>
-              <button className={`room-item ${r.id === selected ? 'active' : ''}`} onClick={() => setSelected(r.id)}>
-                <span className="room-item-icon">{r.mode === 'trpg' ? '🎲' : (r.avatars[0] ?? '💬')}</span>
-                <span className="room-item-body">
-                  <span className="room-item-title">{r.title}</span>
-                  <span className="room-item-meta">
-                    {r.mode === 'trpg' ? '跑团' : `${r.participantCount} 位 AI`} · {ago(r.updatedAt)}
-                  </span>
-                </span>
-              </button>
-            </li>
-          ))}
-        </ul>
+        <RoomList
+          ref={searchRef}
+          rooms={results ?? rooms}
+          query={query}
+          searching={searching}
+          selected={selected}
+          onQuery={setQuery}
+          onSelect={setSelected}
+          onChanged={() => void refresh()}
+          onDeleted={onRoomDeleted}
+        />
         <div className="sidebar-footer">
           <div className={`conn ${models.error ? 'conn-bad' : models.loading ? '' : 'conn-ok'}`} title={models.error || undefined}>
             <span className="dot" />
@@ -132,15 +173,7 @@ export default function App() {
 
       <main className="main">
         {selected ? (
-          <RoomView
-            key={selected}
-            roomId={selected}
-            onMetaChange={loadRooms}
-            onDeleted={() => {
-              setSelected(null);
-              void loadRooms();
-            }}
-          />
+          <RoomView key={selected} roomId={selected} onMetaChange={refresh} onDeleted={() => onRoomDeleted(selected)} />
         ) : (
           <div className="welcome">
             <div className="welcome-logo">
@@ -192,6 +225,7 @@ export default function App() {
           }}
         />
       )}
+      <ConfirmHost />
       <Toaster />
     </div>
   );

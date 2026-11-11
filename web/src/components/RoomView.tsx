@@ -8,6 +8,7 @@ import {
   PanelRightClose,
   PanelRightOpen,
   Pause,
+  Pencil,
   Play,
   Settings2,
   Share2,
@@ -18,6 +19,7 @@ import {
 } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { del, patch, post } from '../api';
+import { askConfirm } from '../confirm';
 import { attempt } from '../toast';
 import { useRoom } from '../useRoom';
 import { AssistantPanel } from './AssistantPanel';
@@ -27,6 +29,7 @@ import { Composer } from './Composer';
 import { ExportModal } from './ExportModal';
 import { MessageItem } from './MessageItem';
 import { ParticipantPanel } from './ParticipantPanel';
+import { deleteRoom, renameRoom } from './RoomList';
 import { RoomSettingsPanel } from './RoomSettingsPanel';
 import { SheetPanel } from './SheetPanel';
 import { TrpgSettingsPanel } from './TrpgSettingsPanel';
@@ -49,6 +52,11 @@ export function RoomView({
   const [menuOpen, setMenuOpen] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [wizard, setWizard] = useState(false);
+  const [editingTitle, setEditingTitle] = useState(false);
+  const saveTitle = async (value: string) => {
+    setEditingTitle(false);
+    if (room && value.trim() && value.trim() !== room.title) await renameRoom(room.id, value);
+  };
   const listRef = useRef<HTMLDivElement>(null);
   const stickToBottom = useRef(true);
   const trpg = room?.mode === 'trpg';
@@ -127,7 +135,32 @@ export function RoomView({
         <header className="room-header">
           <div className="room-title">
             <div className="room-title-row">
-              <h1>{room.title}</h1>
+              {editingTitle ? (
+                <input
+                  className="room-title-input"
+                  defaultValue={room.title}
+                  autoFocus
+                  aria-label="房间名"
+                  onFocus={(e) => e.target.select()}
+                  onBlur={(e) => void saveTitle(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.nativeEvent.isComposing && e.keyCode !== 229) e.currentTarget.blur();
+                    if (e.key === 'Escape') {
+                      e.currentTarget.value = room.title;
+                      e.currentTarget.blur();
+                    }
+                  }}
+                />
+              ) : (
+                <>
+                  <h1 onDoubleClick={() => setEditingTitle(true)} title="双击修改房间名">
+                    {room.title}
+                  </h1>
+                  <button className="icon-btn sm title-edit" title="修改房间名" onClick={() => setEditingTitle(true)}>
+                    <Pencil />
+                  </button>
+                </>
+              )}
               <span className={`status-pill ${running ? 'running' : ''} ${generating || runner?.picking ? 'busy' : ''}`}>
                 <span className="dot" />
                 {statusText}
@@ -183,8 +216,13 @@ export function RoomView({
                   <button
                     onClick={async () => {
                       setMenuOpen(false);
-                      const msg = trpg ? '清空所有消息，重新开始这场游戏？调查员会保留。' : '清空这个房间的所有消息？角色和设置会保留。';
-                      if (confirm(msg)) await attempt(() => post(`${base}/clear`));
+                      const ok = await askConfirm({
+                        title: trpg ? '重新开始游戏' : '清空对话',
+                        message: trpg ? '清空所有消息，从头开始这场游戏？你的调查员会保留。' : '清空这个房间的所有消息？角色和设置会保留。',
+                        confirmText: trpg ? '重新开始' : '清空',
+                        danger: true,
+                      });
+                      if (ok) await attempt(() => post(`${base}/clear`));
                     }}
                   >
                     <Eraser /> {trpg ? '重新开始游戏' : '清空对话'}
@@ -194,7 +232,7 @@ export function RoomView({
                     className="danger"
                     onClick={async () => {
                       setMenuOpen(false);
-                      if (confirm(`删除房间「${room.title}」？此操作不能撤销。`) && (await attempt(() => del(base)))) onDeleted();
+                      if (await deleteRoom(room)) onDeleted();
                     }}
                   >
                     <Trash2 /> 删除房间

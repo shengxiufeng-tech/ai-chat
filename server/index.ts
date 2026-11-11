@@ -182,7 +182,7 @@ app.get(
 
 app.get(
   '/api/rooms',
-  h(() => store.listRooms()),
+  h((req) => store.listRooms(typeof req.query.q === 'string' ? req.query.q : '')),
 );
 
 const TEAMMATE_AVATARS = ['🧭', '📷', '🩺', '🗝️'];

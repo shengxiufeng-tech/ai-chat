@@ -4,9 +4,35 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { AppSettings, CharacterTemplate, Room, RoomSummary } from '../shared/types.ts';
+import { stripCommands } from '../shared/coc.ts';
 import { DEFAULT_ROOM_SETTINGS } from '../shared/types.ts';
 
 export const newId = () => randomUUID().replace(/-/g, '').slice(0, 12);
+
+/** 截取命中位置附近的一小段文字：前面只留几个字，保证侧栏一行里能看到高亮的关键词 */
+export function snippet(text: string, q: string, before = 6, after = 40) {
+  const flat = text.replace(/\s+/g, ' ').trim();
+  const idx = flat.toLowerCase().indexOf(q);
+  if (idx < 0) return flat.slice(0, before + after);
+  const start = Math.max(0, idx - before);
+  const end = Math.min(flat.length, idx + q.length + after);
+  return `${start > 0 ? '…' : ''}${flat.slice(start, end)}${end < flat.length ? '…' : ''}`;
+}
+
+/** 在一个房间里搜索：标题 > AI 名字 > 场景 > 消息（从最新的消息开始找） */
+export function searchRoom(r: Room, q: string): RoomSummary['match'] {
+  const has = (t?: string) => !!t && t.toLowerCase().includes(q);
+  if (has(r.title)) return { where: 'title', text: r.title };
+  const p = r.participants.find((x) => has(x.name) || has(x.bio));
+  if (p) return { where: 'participant', text: has(p.name) ? p.name : snippet(p.bio, q) };
+  if (has(r.scenario)) return { where: 'scenario', text: snippet(r.scenario, q) };
+  for (let i = r.messages.length - 1; i >= 0; i--) {
+    const m = r.messages[i];
+    const text = stripCommands(m.content);
+    if (has(text)) return { where: 'message', text: snippet(text, q), speaker: m.speakerName };
+  }
+  return undefined;
+}
 
 /** 补全旧版本数据里没有的字段 */
 export function normalizeRoom(room: Room): Room {
@@ -101,9 +127,12 @@ export class Store {
 
   // ---------- 房间 ----------
 
-  listRooms(): RoomSummary[] {
-    return [...this.rooms.values()]
-      .map((r) => ({
+  /** 房间列表；带 query 时只返回命中的房间（标题、AI 名字、场景、消息内容），并附上命中片段 */
+  listRooms(query = ''): RoomSummary[] {
+    const q = query.trim().toLowerCase();
+    const out: RoomSummary[] = [];
+    for (const r of this.rooms.values()) {
+      const summary: RoomSummary = {
         id: r.id,
         mode: r.mode,
         title: r.title,
@@ -111,8 +140,15 @@ export class Store {
         participantCount: r.participants.length,
         messageCount: r.messages.length,
         updatedAt: r.updatedAt,
-      }))
-      .sort((a, b) => b.updatedAt - a.updatedAt);
+      };
+      if (q) {
+        const match = searchRoom(r, q);
+        if (!match) continue;
+        summary.match = match;
+      }
+      out.push(summary);
+    }
+    return out.sort((a, b) => b.updatedAt - a.updatedAt);
   }
 
   getRoom(id: string): Room | undefined {

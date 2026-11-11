@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import type { Room } from '../../../shared/types';
 import { del, post } from '../api';
+import { askConfirm } from '../confirm';
 import { attempt } from '../toast';
 
 const QUICK = [
@@ -78,7 +79,11 @@ export function AssistantPanel({ room }: { room: Room }) {
           <button
             className="icon-btn"
             title="清空对话"
-            onClick={() => confirm('清空和规则助手的对话？') && attempt(() => del(`/rooms/${room.id}/assistant`))}
+            onClick={async () => {
+              if (await askConfirm({ title: '清空对话', message: '清空和规则助手的对话记录？', confirmText: '清空', danger: true })) {
+                await attempt(() => del(`/rooms/${room.id}/assistant`));
+              }
+            }}
           >
             <Trash2 />
           </button>

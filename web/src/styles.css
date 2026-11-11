@@ -725,6 +725,121 @@ h4 {
   letter-spacing: 0.04em;
 }
 
+/* 搜索框 */
+.room-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 6px 0 10px;
+  border-radius: 9px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  transition:
+    border-color 0.15s,
+    box-shadow 0.15s;
+}
+
+.room-search:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.room-search > svg {
+  width: 15px;
+  height: 15px;
+  color: var(--text-3);
+  flex: none;
+}
+
+.room-search input {
+  border: none;
+  background: transparent;
+  box-shadow: none;
+  padding: 0;
+  height: 100%;
+  font-size: 13px;
+  min-width: 0;
+}
+
+.room-search input:focus {
+  box-shadow: none;
+}
+
+kbd {
+  font-family: var(--font);
+  font-size: 10.5px;
+  color: var(--text-3);
+  border: 1px solid var(--border-strong);
+  border-bottom-width: 2px;
+  border-radius: 5px;
+  padding: 0 5px;
+  line-height: 16px;
+  white-space: nowrap;
+  flex: none;
+}
+
+.room-list-empty {
+  padding: 16px 8px;
+  font-size: 12.5px;
+  color: var(--text-3);
+  text-align: center;
+  line-height: 1.6;
+}
+
+.room-li {
+  position: relative;
+}
+
+.room-more {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  opacity: 0;
+  background: var(--surface-1);
+  box-shadow: var(--shadow-sm);
+}
+
+.room-li:hover .room-more,
+.room-li.menu-open .room-more,
+.room-more:focus-visible {
+  opacity: 1;
+}
+
+.room-li:hover .room-item-body,
+.room-li.menu-open .room-item-body {
+  padding-right: 24px;
+}
+
+.room-menu {
+  position: fixed;
+  top: auto;
+  right: auto;
+  z-index: 60;
+}
+
+.room-rename {
+  height: 48px;
+  font-size: 13.5px;
+  font-weight: 550;
+  padding: 0 12px;
+}
+
+.room-item-snippet {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+mark {
+  background: var(--warn-soft);
+  color: var(--warn);
+  border-radius: 3px;
+  padding: 0 1px;
+}
+
 .room-item {
   width: 100%;
   text-align: left;
@@ -972,6 +1087,25 @@ h4 {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  cursor: text;
+}
+
+.title-edit {
+  opacity: 0;
+  margin-left: -6px;
+}
+
+.room-title-row:hover .title-edit,
+.title-edit:focus-visible {
+  opacity: 1;
+}
+
+.room-title-input {
+  font-size: 16px;
+  font-weight: 650;
+  height: 30px;
+  padding: 0 8px;
+  width: min(360px, 40vw);
 }
 
 .room-subtitle {
@@ -2264,6 +2398,31 @@ h4 {
 
 .modal-wide {
   width: min(800px, 100%);
+}
+
+.modal-sm {
+  width: min(420px, 100%);
+}
+
+.confirm-message {
+  color: var(--text-2);
+  font-size: 13.5px;
+  line-height: 1.7;
+}
+
+.confirm-message b {
+  color: var(--text);
+}
+
+.btn-danger-solid {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: #fff;
+}
+
+.btn-danger-solid:hover:not(:disabled) {
+  background: var(--danger);
+  filter: brightness(1.1);
 }
 
 .modal-xl {

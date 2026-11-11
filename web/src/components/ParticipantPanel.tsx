@@ -2,6 +2,7 @@ import { ChevronDown, ChevronUp, Megaphone, Pencil, Plus, Save, Trash2, UserPlus
 import { useEffect, useState, type CSSProperties } from 'react';
 import type { CharacterTemplate, Participant, Room, RunnerState } from '../../../shared/types';
 import { del, get, patch, post } from '../api';
+import { askConfirm } from '../confirm';
 import { attempt, toast } from '../toast';
 import { EffortPicker } from './EffortPicker';
 import { ModelTag } from './MessageItem';
@@ -128,7 +129,7 @@ function AddParticipantModal({
     if (p) onAdded(p);
   };
   const remove = async (t: CharacterTemplate) => {
-    if (!confirm(`删除模板「${t.name}」？`)) return;
+    if (!(await askConfirm({ title: '删除模板', message: `删除角色模板「${t.name}」？已经加进房间的角色不受影响。`, confirmText: '删除', danger: true }))) return;
     await attempt(() => del(`/templates/${t.id}`));
     setTemplates((list) => list?.filter((x) => x.id !== t.id) ?? null);
   };
@@ -202,7 +203,7 @@ function ParticipantEditor({
     if (ok) onClose();
   };
   const remove = async () => {
-    if (!confirm(`把「${participant.name}」移出房间？`)) return;
+    if (!(await askConfirm({ title: '移出房间', message: `把「${participant.name}」移出房间？TA 已经说过的话会保留。`, confirmText: '移出', danger: true }))) return;
     if (await attempt(() => del(url))) onClose();
   };
   const saveTemplate = async () => {

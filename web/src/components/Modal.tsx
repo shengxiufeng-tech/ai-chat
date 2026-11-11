@@ -17,7 +17,7 @@ export function Modal({
   onClose: () => void;
   children: ReactNode;
   footer?: ReactNode;
-  size?: 'wide' | 'xl';
+  size?: 'sm' | 'wide' | 'xl';
   /** 标题下方的额外内容（如步骤条） */
   header?: ReactNode;
 }) {

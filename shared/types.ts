@@ -118,6 +118,8 @@ export interface RoomSummary {
   participantCount: number;
   messageCount: number;
   updatedAt: number;
+  /** 搜索时：命中的位置和上下文片段 */
+  match?: { where: 'title' | 'participant' | 'scenario' | 'message'; text: string; speaker?: string };
 }
 
 export type RunStatus = 'running' | 'paused';
