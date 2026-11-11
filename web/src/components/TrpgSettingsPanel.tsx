@@ -1,7 +1,8 @@
-import { Eye, EyeOff } from 'lucide-react';
+import { Eye, EyeOff, Lock, Trash2 } from 'lucide-react';
 import { useState } from 'react';
 import type { Room } from '../../../shared/types';
-import { patch } from '../api';
+import { del, patch } from '../api';
+import { askConfirm } from '../confirm';
 import { attempt } from '../toast';
 import { Field, ToggleRow } from './ui';
 
@@ -45,14 +46,59 @@ export function TrpgSettingsPanel({ room }: { room: Room }) {
         onChange={(v) => set({ teammatesAct: v })}
       />
       <div className="divider" />
-      <Field label="剧本内容（剧透）" hint="只有守秘人能看到。玩完之后再看吧">
+      <ToggleRow
+        label="秘密备忘"
+        hint="守秘人把自己临时定下的秘密设定（真相、NPC 的真实身份等）记在只有它能看到的备忘里，保证前后一致。AI 即兴剧本强烈建议开启"
+        checked={trpg.memo}
+        onChange={(v) => set({ memo: v })}
+      />
+      <div className="divider" />
+      <Field
+        label="剧透区"
+        hint={`剧本内容${trpg.memo ? `和守秘人的秘密备忘（${trpg.memos.length} 条）` : ''}只有守秘人能看到，玩完之后再看吧`}
+      >
         <button className="btn btn-sm" onClick={() => setSpoiler((x) => !x)} style={{ alignSelf: 'flex-start' }}>
           {spoiler ? <EyeOff /> : <Eye />} {spoiler ? '隐藏' : '我确定要看'}
         </button>
         {spoiler && (
-          <div className="scenario-intro" style={{ whiteSpace: 'pre-wrap', maxHeight: 360, overflowY: 'auto' }}>
-            {trpg.scenarioSecret}
-          </div>
+          <>
+            <div className="section-title" style={{ marginTop: 6 }}>秘密备忘</div>
+            {trpg.memos.length === 0 ? (
+              <span className="hint">守秘人还没有写下秘密备忘。</span>
+            ) : (
+              trpg.memos.map((m) => (
+                <div key={m.id} className="note-card memo-card">
+                  <div className="note-head">
+                    <Lock style={{ width: 13, height: 13, color: 'var(--text-3)' }} />
+                    <span className="note-title">{m.title}</span>
+                    <span className="spacer" />
+                    <div className="note-actions">
+                      <button
+                        className="icon-btn sm"
+                        title="删除"
+                        onClick={async () => {
+                          const ok = await askConfirm({
+                            title: '删除秘密备忘',
+                            message: `删除备忘「${m.title}」？守秘人之后就不会再看到它，可能导致剧情前后不一致。`,
+                            confirmText: '删除',
+                            danger: true,
+                          });
+                          if (ok) await attempt(() => del(`/rooms/${room.id}/memos/${m.id}`));
+                        }}
+                      >
+                        <Trash2 />
+                      </button>
+                    </div>
+                  </div>
+                  <div className="note-text">{m.text}</div>
+                </div>
+              ))
+            )}
+            <div className="section-title" style={{ marginTop: 6 }}>剧本内容</div>
+            <div className="scenario-intro" style={{ whiteSpace: 'pre-wrap', maxHeight: 360, overflowY: 'auto' }}>
+              {trpg.scenarioSecret}
+            </div>
+          </>
         )}
       </Field>
     </div>

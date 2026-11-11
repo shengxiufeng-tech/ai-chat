@@ -587,8 +587,9 @@ h4 {
 
 .field-label {
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
-  gap: 6px;
+  gap: 2px 6px;
   font-size: 13px;
   font-weight: 550;
   color: var(--text);
@@ -2126,6 +2127,11 @@ mark {
 
 .note-card.editing {
   gap: 8px;
+}
+
+.memo-card {
+  border-style: dashed;
+  margin-bottom: 0;
 }
 
 .note-head {

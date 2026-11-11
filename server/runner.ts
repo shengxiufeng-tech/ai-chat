@@ -360,7 +360,7 @@ export class RoomRunner {
       room.messages.push(msg);
       this.emit({ type: 'message_added', message: msg });
     }
-    if (res.sheetsChanged || res.notes.length) this.emitRoomMeta();
+    if (res.sheetsChanged || res.notes.length || res.memosChanged) this.emitRoomMeta();
     this.store.touchRoom(room.id, { immediate: true });
 
     if (res.pendingHuman > 0) return; // 等玩家掷骰

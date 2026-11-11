@@ -1,6 +1,6 @@
 // 前后端共用的数据类型
 
-import type { InvestigatorSheet, NoteEntry, NoteEvent, RollRecord, TrpgState } from './coc.ts';
+import type { InvestigatorSheet, MemoEntry, NoteEntry, NoteEvent, RollRecord, TrpgState } from './coc.ts';
 
 export type ParticipantRole = 'kp' | 'player';
 
@@ -185,6 +185,8 @@ export interface TrpgCreateOptions {
   autoRoll: boolean;
   /** 守秘人笔记 */
   notebook?: boolean;
+  /** 秘密备忘 */
+  memo?: boolean;
   humanName: string;
 }
 
@@ -228,4 +230,4 @@ export const effortLabel = (effort?: string) => (effort ? (EFFORT_LABELS[effort]
 /** 用于排序的思考强度顺序 */
 export const EFFORT_ORDER = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
 
-export type { InvestigatorSheet, NoteEntry, NoteEvent, RollRecord, TrpgState };
+export type { InvestigatorSheet, MemoEntry, NoteEntry, NoteEvent, RollRecord, TrpgState };

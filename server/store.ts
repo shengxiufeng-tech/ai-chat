@@ -49,6 +49,8 @@ export function normalizeRoom(room: Room): Room {
     room.trpg.sheets = room.trpg.sheets ?? {};
     room.trpg.notebook = room.trpg.notebook ?? true;
     room.trpg.notes = room.trpg.notes ?? [];
+    room.trpg.memo = room.trpg.memo ?? true;
+    room.trpg.memos = room.trpg.memos ?? [];
   }
   return room;
 }

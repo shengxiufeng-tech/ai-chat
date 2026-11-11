@@ -5,8 +5,11 @@ import type { Message, Participant, Room } from '../shared/types.ts';
 import { DEFAULT_ROOM_SETTINGS } from '../shared/types.ts';
 import { parseModel } from './llm.ts';
 import { buildHumanlikeMessages, HUMANLIKE_PROMPT } from './prompt.ts';
+import { stripCommands } from '../shared/coc.ts';
+import { improvScenario } from './scenarios.ts';
 import {
   actorKey,
+  buildAssistantMessages,
   buildKpMessages,
   buildTeammateMessages,
   parseSuggestions,
@@ -46,6 +49,8 @@ function trpgRoom(autoRoll = false): Room {
     assistantLog: [],
     notebook: true,
     notes: [],
+    memo: true,
+    memos: [],
   };
   return {
     id: 'r',
@@ -296,4 +301,44 @@ test('提醒守秘人不要替调查员说话：系统提示写明边界，最�
   assert.match(kp[0].content, /玩家和 AI 队友（「张三」、「林薇」）都会自己发言/);
   assert.match(kp[0].content, /可以描述外界对他们的影响/); // 允许描写影响和结果，不过度限制
   assert.match(kp.at(-1)!.content, /「林薇」会在你之后自己发言，不要替TA说台词或决定行动。）$/);
+});
+
+test('秘密备忘：只有守秘人能看到，队友、规则助手和显示内容里都没有', () => {
+  const room = trpgRoom();
+  const secret = '失踪案是管家所为，人藏在地窖';
+  let res = processKpCommands(room, `管家礼貌地欠了欠身。[备忘:真相:${secret}]`);
+  assert.equal(res.memosChanged, true);
+  assert.equal(res.notes.length, 0);
+  assert.equal(res.rolls.length, 0);
+  assert.deepEqual(room.trpg!.memos.map((m) => [m.title, m.text]), [['真相', secret]]);
+
+  // 同一主题更新；内容不变不算变化；单个参数也能记
+  res = processKpCommands(room, '[备忘:真相:失踪案是管家所为，人已被转移到钟楼]');
+  assert.equal(res.memosChanged, true);
+  assert.equal(room.trpg!.memos.length, 1);
+  assert.equal(processKpCommands(room, '[备忘:真相:失踪案是管家所为，人已被转移到钟楼]').memosChanged, false);
+  processKpCommands(room, '[备忘:女仆其实是目击者]');
+  assert.equal(room.trpg!.memos.length, 2);
+
+  const kpMsg = '管家礼貌地欠了欠身。[备忘:真相:失踪案是管家所为]';
+  room.messages = [msg({ role: 'ai', participantId: 'kp', speakerName: '守秘人', content: kpMsg })];
+  const kp = buildKpMessages(room, room.participants[0], room.messages);
+  assert.match(kp[0].content, /【秘密备忘】（只有你能看到/);
+  assert.match(kp.at(-1)!.content, /秘密备忘（只有你能看到）：[\s\S]*钟楼/);
+
+  const leaked = (texts: string[]) => texts.some((t) => /钟楼|女仆其实是目击者|管家所为/.test(t));
+  assert.equal(leaked(buildTeammateMessages(room, room.participants[1], room.messages).map((m) => m.content)), false);
+  assert.equal(leaked(buildAssistantMessages(room, '现在发生了什么？', 'ask').map((m) => m.content)), false);
+  assert.equal(stripCommands(kpMsg), '管家礼貌地欠了欠身。');
+
+  // 关闭后忽略，提示词里也没有
+  room.trpg!.memo = false;
+  assert.equal(processKpCommands(room, '[备忘:新秘密:不会被记下]').memosChanged, false);
+  const off = buildKpMessages(room, room.participants[0], room.messages);
+  assert.doesNotMatch(off[0].content, /【秘密备忘】/);
+  assert.doesNotMatch(off.at(-1)!.content, /秘密备忘/);
+});
+
+test('即兴剧本要求守秘人第一次回复就把真相记进备忘', () => {
+  assert.match(improvScenario('海边灯塔', 'modern').secret, /\[备忘:真相:/);
 });

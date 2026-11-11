@@ -5,6 +5,7 @@ import {
   NOTE_KIND_LABELS,
   type Difficulty,
   type InvestigatorSheet,
+  type MemoEntry,
   type NoteEntry,
   type NoteEvent,
   type NoteKind,
@@ -107,8 +108,17 @@ export function kpStateBlock(room: Room) {
     if (sheet) lines.push(`AI 队友：\n${indent(sheetSummary(sheet, trpg.era))}`);
   }
   if (trpg.notebook) lines.push(`守秘人笔记（玩家也能看到）：\n${indent(notesText(trpg.notes))}`);
+  if (trpg.memo) {
+    const memos = trpg.memos.length ? trpg.memos.map((m) => `- ${m.title}：${m.text}`).join('\n') : '（还是空的）';
+    lines.push(`秘密备忘（只有你能看到）：\n${indent(memos)}`);
+  }
   return lines.join('\n');
 }
+
+const MEMO_RULES = `【秘密备忘】（只有你能看到，玩家、AI 队友和规则助手都看不到）
+用来记下你自己临时决定、但剧本里没有写的秘密设定，保证后面的剧情前后一致：比如即兴定下的真相、NPC 的真实身份和动机、埋下的伏笔、还没被发现的线索藏在哪里。
+- [备忘:主题:内容]，例如 [备忘:真相:失踪案是管家所为，他把人藏在地窖]。同一个主题会覆盖更新，剧情改变时记得更新。
+- 只记会影响后续剧情的重要设定；剧本里已经写明的内容不用重复记。`;
 
 const NOTEBOOK_RULES = `【守秘人笔记】
 你有一本笔记，用来记下重要的 NPC 和线索，帮你在很长的游戏里保持前后一致。注意：这本笔记会显示在玩家的界面上，玩家随时可以翻看。
@@ -134,7 +144,7 @@ export function buildKpSystemPrompt(room: Room, kp: Participant) {
     '你是这场《克苏鲁的呼唤》第七版（COC 7th）跑团的守秘人（KP）：负责主持游戏、描述环境、扮演所有 NPC，并按规则裁定结果。',
     kp.persona.trim() ? `\n【你的主持风格】\n${kp.persona.trim()}` : '',
     `\n【玩家】\n${rosterNames(room)}`,
-    `每一轮最后一条消息的末尾会附上【当前状态】：调查员最新的数值、技能和物品${trpg.notebook ? '，以及守秘人笔记' : ''}。以那里的内容为准。`,
+    `每一轮最后一条消息的末尾会附上【当前状态】：调查员最新的数值、技能和物品${trpg.notebook ? '，守秘人笔记' : ''}${trpg.memo ? '，以及你的秘密备忘' : ''}。以那里的内容为准。`,
     `\n${trpg.scenarioSecret}`,
     `\n【主持原则】
 - 用第二人称（"你"）生动地描述场景和 NPC 的言行，一般 150~300 字，结尾把选择交还给玩家（比如"你打算怎么做？"）。
@@ -160,6 +170,7 @@ export function buildKpSystemPrompt(room: Room, kp: Participant) {
 - 收到【骰子】结果后，根据成功等级描述后果。失败也要让剧情推进（付出代价、引来麻烦、浪费时间），不要只说"什么都没发现"。
 - 玩家可以对失败的普通技能检定"孤注一掷"重骰一次；孤注一掷再失败时，要给出严重的后果。`,
     trpg.notebook ? `\n${NOTEBOOK_RULES}` : '',
+    trpg.memo ? `\n${MEMO_RULES}` : '',
   ];
   return parts.filter(Boolean).join('\n');
 }
@@ -369,6 +380,8 @@ export interface ProcessResult {
   rolls: RollRecord[];
   /** 新记下或更新的笔记 */
   notes: NoteEvent[];
+  /** 秘密备忘有变化 */
+  memosChanged: boolean;
   /** 有需要守秘人看到结果再继续的自动掷骰 */
   needContinue: boolean;
   /** 等待人类玩家掷骰的数量 */
@@ -380,7 +393,15 @@ export interface ProcessResult {
 /** 解析守秘人消息里的指令，生成骰子记录（会直接修改角色卡） */
 export function processKpCommands(room: Room, text: string, rng: Rng = Math.random): ProcessResult {
   const trpg = room.trpg!;
-  const result: ProcessResult = { rolls: [], notes: [], needContinue: false, pendingHuman: 0, sheetsChanged: false, problems: [] };
+  const result: ProcessResult = {
+    rolls: [],
+    notes: [],
+    memosChanged: false,
+    needContinue: false,
+    pendingHuman: 0,
+    sheetsChanged: false,
+    problems: [],
+  };
   const seen = new Set<string>();
 
   for (const m of text.matchAll(COMMAND_RE)) {
@@ -396,6 +417,15 @@ export function processKpCommands(room: Room, text: string, rng: Rng = Math.rand
     const plain = args.filter((a) => !a.startsWith('@'));
     const key = actorKey(room, mention);
     const sheet = key ? trpg.sheets[key] : undefined;
+
+    if (kind === '备忘') {
+      if (!trpg.memo) continue;
+      const parts = args.map((a) => a.replace(/^@/, ''));
+      const title = parts.length >= 2 ? parts[0] : '备忘';
+      const body = parts.length >= 2 ? parts.slice(1).join('：') : (parts[0] ?? '');
+      if (upsertMemo(trpg.memos, title, body)) result.memosChanged = true;
+      continue;
+    }
 
     if (kind === 'NPC' || kind === '线索') {
       if (!trpg.notebook) continue; // 笔记关闭时忽略（指令仍然会从显示里去掉）
@@ -576,6 +606,23 @@ export function upsertNote(notes: NoteEntry[], kind: NoteKind, rawTitle: string,
   const entry: NoteEntry = { id: newId(), kind, title, text, createdAt: now, updatedAt: now };
   notes.push(entry);
   return { noteId: entry.id, kind, title, text, updated: false };
+}
+
+/** 记下或更新一条秘密备忘；返回是否有变化 */
+export function upsertMemo(memos: MemoEntry[], rawTitle: string, rawText: string): boolean {
+  const title = rawTitle.trim().slice(0, 40);
+  const text = rawText.trim().slice(0, 600);
+  if (!title || !text) return false;
+  const now = Date.now();
+  const existing = memos.find((m) => m.title.toLowerCase() === title.toLowerCase());
+  if (existing) {
+    if (existing.text === text) return false;
+    existing.text = text;
+    existing.updatedAt = now;
+    return true;
+  }
+  memos.push({ id: newId(), title, text, createdAt: now, updatedAt: now });
+  return true;
 }
 
 export function noteText(ev: NoteEvent) {

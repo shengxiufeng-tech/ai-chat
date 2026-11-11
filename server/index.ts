@@ -252,6 +252,8 @@ function createTrpgRoom(o: TrpgCreateOptions): Room {
     assistantLog: [],
     notebook: o.notebook ?? true,
     notes: [],
+    memo: o.memo ?? true,
+    memos: [],
   };
   const count = Math.max(0, Math.min(3, Math.floor(o.teammateCount ?? 0)));
   const occupations = [...OCCUPATIONS].sort(() => Math.random() - 0.5);
@@ -511,7 +513,7 @@ app.patch(
   h((req) => {
     const room = getTrpgRoom(param(req, 'id'));
     const b = req.body ?? {};
-    for (const key of ['teachingMode', 'autoRoll', 'teammatesAct', 'notebook'] as const) {
+    for (const key of ['teachingMode', 'autoRoll', 'teammatesAct', 'notebook', 'memo'] as const) {
       if (typeof b[key] === 'boolean') room.trpg[key] = b[key];
     }
     store.touchRoom(room.id, { immediate: true });
@@ -541,6 +543,16 @@ app.delete(
   h((req) => {
     const room = getTrpgRoom(param(req, 'id'));
     room.trpg.notes = room.trpg.notes.filter((n) => n.id !== param(req, 'nid'));
+    store.touchRoom(room.id, { immediate: true });
+    runners.get(room.id).emitRoomMeta();
+  }),
+);
+
+app.delete(
+  '/api/rooms/:id/memos/:mid',
+  h((req) => {
+    const room = getTrpgRoom(param(req, 'id'));
+    room.trpg.memos = room.trpg.memos.filter((m) => m.id !== param(req, 'mid'));
     store.touchRoom(room.id, { immediate: true });
     runners.get(room.id).emitRoomMeta();
   }),

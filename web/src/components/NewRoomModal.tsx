@@ -56,6 +56,7 @@ export function NewRoomModal({
     teachingMode: true,
     autoRoll: false,
     notebook: true,
+    memo: true,
     humanName: '我',
   });
   const setTrpg = <K extends keyof TrpgCreateOptions>(k: K, v: TrpgCreateOptions[K]) => setT((x) => ({ ...x, [k]: v }));
@@ -221,6 +222,12 @@ export function NewRoomModal({
               hint="守秘人自动记下重要的 NPC 和线索，你随时可以翻看"
               checked={t.notebook ?? true}
               onChange={(v) => setTrpg('notebook', v)}
+            />
+            <ToggleRow
+              label="秘密备忘"
+              hint="守秘人把临时定下的秘密设定记在只有它能看到的地方，保证前后一致（AI 即兴剧本建议开启）"
+              checked={t.memo ?? true}
+              onChange={(v) => setTrpg('memo', v)}
             />
             <ToggleRow label="自动替我掷骰" hint="关闭时由你亲手点「掷骰」，更有参与感" checked={t.autoRoll} onChange={(v) => setTrpg('autoRoll', v)} />
           </>

@@ -63,6 +63,18 @@ export interface TrpgState {
   /** 守秘人笔记：开启后守秘人会记录 NPC 和线索（玩家可见） */
   notebook: boolean;
   notes: NoteEntry[];
+  /** 秘密备忘：守秘人自己定下的秘密设定，只有守秘人能看到 */
+  memo: boolean;
+  memos: MemoEntry[];
+}
+
+/** 秘密备忘的一条（主题 + 内容），玩家、AI 队友和规则助手都看不到 */
+export interface MemoEntry {
+  id: string;
+  title: string;
+  text: string;
+  createdAt: number;
+  updatedAt: number;
 }
 
 export type NoteKind = 'npc' | 'clue';
@@ -722,7 +734,7 @@ export function resolveTarget(sheet: InvestigatorSheet, rawName: string): { name
 // ---------------- 文本 ----------------
 
 /** 守秘人指令的正则：[检定:侦查]、【理智：1/1d6】等 */
-export const COMMAND_RE = /[[【]\s*(检定|理智|掷骰|HP|MP|SAN|幸运|物品|NPC|线索)\s*[:：]\s*([^\]】\n]{1,240})[\]】]/gi;
+export const COMMAND_RE = /[[【]\s*(检定|理智|掷骰|HP|MP|SAN|幸运|物品|NPC|线索|备忘)\s*[:：]\s*([^\]】\n]{1,240})[\]】]/gi;
 
 /** 去掉消息里的守秘人指令（显示用） */
 export function stripCommands(text: string) {
