@@ -122,7 +122,12 @@ export interface RollRecord {
   /** 技能名 / 理智 / 骰子表达式 / 数值名 */
   label: string;
   // 检定和理智检定
+  /** 成功线（有修正时是修正后的值） */
   target?: number;
+  /** 守秘人修正之前的技能值（只有修正过时才有） */
+  baseTarget?: number;
+  /** 成功线的修正，例如「-1d20(20)」「+10」「=35」 */
+  modifier?: string;
   difficulty?: Difficulty;
   /** 正数是奖励骰个数，负数是惩罚骰个数 */
   bonus?: number;
@@ -730,6 +735,49 @@ const SKILL_ALIASES: Record<string, string> = {
 };
 
 /** 根据技能 / 属性名找到检定的目标值 */
+export type CheckModifier = { kind: 'delta'; sign: 1 | -1; expr: string } | { kind: 'set'; value: number };
+
+const MINUS = /[-－−—–]/;
+
+/**
+ * 检定指令里的成功线修正：+10、-20、-1d20、+2d6（加减），=35、目标35、35（直接指定）。
+ * 不是修正的参数返回 null。
+ */
+export function parseCheckModifier(arg: string): CheckModifier | null {
+  const a = arg.trim().replace(/[ｄＤ]/g, 'd');
+  const delta = a.match(/^(?:修正|调整|加值)?\s*([+＋\-－−—–])\s*(\d*d\d+(?:\s*[+\-]\s*\d+)?|\d{1,3})\s*%?$/i);
+  if (delta) return { kind: 'delta', sign: MINUS.test(delta[1]) ? -1 : 1, expr: delta[2].replace(/\s+/g, '').toLowerCase() };
+  const set = a.match(/^(?:=|＝|目标|目标值|成功线|成功率)?\s*(\d{1,3})\s*%?$/);
+  if (set) return { kind: 'set', value: Number(set[1]) };
+  return null;
+}
+
+/** 「幸运-1d20」「侦查 +10」这种把修正直接写在技能名后面的写法 */
+export function splitInlineModifier(skill: string): { skill: string; modifier?: CheckModifier } {
+  const m = skill.trim().match(/^(.+?)\s*([+＋\-－−—–]\s*(?:\d*[dｄ]\d+|\d{1,3}))$/i);
+  if (!m) return { skill };
+  const modifier = parseCheckModifier(m[2]);
+  return modifier ? { skill: m[1].trim(), modifier } : { skill };
+}
+
+/** 按修正算出新的成功线（掷修正骰），至少为 1 */
+export function applyCheckModifiers(base: number, mods: CheckModifier[], rng: Rng = Math.random): { target: number; text: string } {
+  let target = base;
+  const parts: string[] = [];
+  for (const m of mods) {
+    if (m.kind === 'set') {
+      target = m.value;
+      parts.push(`=${m.value}`);
+      continue;
+    }
+    const r = rollExpression(m.expr, rng);
+    target += m.sign * r.total;
+    const sign = m.sign < 0 ? '-' : '+';
+    parts.push(/d/.test(m.expr) ? `${sign}${m.expr}(${r.total})` : `${sign}${r.total}`);
+  }
+  return { target: Math.max(1, Math.min(199, target)), text: parts.join(' ') };
+}
+
 export function resolveTarget(sheet: InvestigatorSheet, rawName: string): { name: string; target: number; found: boolean } {
   const name = rawName.trim().replace(/（/g, '(').replace(/）/g, ')');
   if (name === '幸运') return { name, target: sheet.luck, found: true };
@@ -773,7 +821,8 @@ export function rollText(r: RollRecord): string {
     case 'check': {
       const req = r.difficulty && r.difficulty !== 'regular' ? `，要求${DIFFICULTY_LABELS[r.difficulty]}` : '';
       const dice = r.bonus ? `，${r.bonus > 0 ? `奖励骰 ${r.bonus}` : `惩罚骰 ${-r.bonus}`}` : '';
-      const head = `${who} 进行「${r.label}」检定（技能值 ${r.target}${req}${dice}）${r.pushed ? '【孤注一掷】' : ''}`;
+      const value = r.baseTarget !== undefined ? `技能值 ${r.baseTarget}，修正 ${r.modifier}，成功线 ${r.target}` : `技能值 ${r.target}`;
+      const head = `${who} 进行「${r.label}」检定（${value}${req}${dice}）${r.pushed ? '【孤注一掷】' : ''}`;
       if (r.pending) return `${head}：等待掷骰`;
       const choice =
         r.success || !r.decision

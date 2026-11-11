@@ -221,3 +221,24 @@ test('构思开关关着时，和原来完全一样', async () => {
     await cleanup();
   }
 });
+
+test('孤注一掷沿用修正后的成功线，不重新掷修正骰', async () => {
+  const { room, runner, cleanup } = setup();
+  try {
+    runner.addHumanMessage('我四处看看');
+    await until(() => !!pendingRoll(room));
+    const roll = pendingRoll(room)!;
+    // 模拟守秘人按剧本调整了成功线
+    roll.roll!.baseTarget = 60;
+    roll.roll!.modifier = '-20';
+    roll.roll!.target = 40;
+    withRandom(0.75, () => runner.resolveRoll(roll.id)); // 77 > 40 → 失败
+    assert.equal(roll.roll!.decision, 'pending');
+    const pushed = withRandom(0.5, () => runner.pushRoll(roll.id));
+    assert.equal(pushed.roll!.target, 40);
+    assert.equal(pushed.roll!.baseTarget, 60);
+    assert.equal(pushed.roll!.modifier, '-20');
+  } finally {
+    await cleanup();
+  }
+});

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { quickInvestigator, type RollRecord, type TrpgState } from '../shared/coc.ts';
+import { parseCheckModifier, quickInvestigator, rollText, splitInlineModifier, type RollRecord, type TrpgState } from '../shared/coc.ts';
 import type { Message, Participant, Room } from '../shared/types.ts';
 import { DEFAULT_ROOM_SETTINGS } from '../shared/types.ts';
 import { parseModel } from './llm.ts';
@@ -456,4 +456,64 @@ test('技能成长：只算成功过的普通技能，结果写回角色卡', as
   // 成长检定之后，旧的成功不再计入
   room.messages.push(msg({ role: 'system', kind: 'roll', roll: card }));
   assert.deepEqual(growthCandidates(room), []);
+});
+
+test('检定修正：剧本要求「幸运 -1d20」时，程序掷修正骰、算出新的成功线', () => {
+  const room = trpgRoom();
+  const sheet = room.trpg!.sheets.player;
+  sheet.luck = 55;
+  // rng 0.999 → 1d20 掷出 20
+  const res = processKpCommands(room, '能不能找到全看运气。[检定:幸运:-1d20]', () => 0.999);
+  const r = res.rolls[0];
+  assert.equal(r.baseTarget, 55);
+  assert.equal(r.modifier, '-1d20(20)');
+  assert.equal(r.target, 35);
+  assert.equal(r.pending, true);
+  assert.match(rollText(r), /技能值 55，修正 -1d20\(20\)，成功线 35/);
+  // 掷出 47：原来按 55 算会成功，现在按 35 算是失败
+  resolveCheck(r, (() => {
+    const seq = [0.7, 0.4]; // 个位 7，十位 40 → 47
+    return () => seq.shift() ?? 0;
+  })());
+  assert.equal(r.total, 47);
+  assert.equal(r.success, false);
+});
+
+test('检定修正的各种写法', () => {
+  const room = trpgRoom();
+  const sheet = room.trpg!.sheets.player;
+  const spot = sheet.skills['侦查'];
+  const run = (cmd: string) => processKpCommands(room, cmd, () => 0.5).rolls[0];
+  assert.equal(run('[检定:侦查:+10]').target, spot + 10);
+  assert.equal(run('[检定:侦查：－20]').target, Math.max(1, spot - 20), '全角符号也行');
+  assert.equal(run('[检定:侦查+10]').target, spot + 10, '写在技能名后面也行');
+  assert.equal(run('[检定:侦查+10]').label, '侦查');
+  assert.equal(run('[检定:幸运:=35]').target, 35);
+  assert.equal(run('[检定:幸运:成功线40]').target, 40);
+  const hard = run('[检定:侦查:困难:-10]');
+  assert.equal(hard.difficulty, 'hard');
+  assert.equal(hard.target, spot - 10);
+  // 修正不会把成功线变成 0 或负数
+  assert.equal(run('[检定:侦查:-200]').target, 1);
+  // 没有修正时和原来一样
+  const plain = run('[检定:侦查]');
+  assert.equal(plain.target, spot);
+  assert.equal(plain.baseTarget, undefined);
+  assert.equal(plain.modifier, undefined);
+  // 队友检定也能修正
+  const mate = run('[检定:侦查:@林薇:-10]');
+  assert.equal(mate.actor, 'mate');
+  assert.equal(mate.target, room.trpg!.sheets.mate.skills['侦查'] - 10);
+});
+
+test('解析修正参数', () => {
+  assert.deepEqual(parseCheckModifier('-1d20'), { kind: 'delta', sign: -1, expr: '1d20' });
+  assert.deepEqual(parseCheckModifier('+ 10'), { kind: 'delta', sign: 1, expr: '10' });
+  assert.deepEqual(parseCheckModifier('−2D6'), { kind: 'delta', sign: -1, expr: '2d6' });
+  assert.deepEqual(parseCheckModifier('=35'), { kind: 'set', value: 35 });
+  assert.deepEqual(parseCheckModifier('35%'), { kind: 'set', value: 35 });
+  assert.equal(parseCheckModifier('困难'), null);
+  assert.equal(parseCheckModifier('奖励1'), null);
+  assert.deepEqual(splitInlineModifier('幸运-1d20'), { skill: '幸运', modifier: { kind: 'delta', sign: -1, expr: '1d20' } });
+  assert.deepEqual(splitInlineModifier('射击(手枪)'), { skill: '射击(手枪)' });
 });

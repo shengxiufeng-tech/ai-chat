@@ -3,6 +3,10 @@
 import {
   COMMAND_RE,
   NO_GROWTH,
+  applyCheckModifiers,
+  parseCheckModifier,
+  splitInlineModifier,
+  type CheckModifier,
   NOTE_KIND_LABELS,
   type Difficulty,
   type InvestigatorSheet,
@@ -164,10 +168,11 @@ export function buildKpSystemPrompt(room: Room, kp: Participant) {
     `\n【骰子指令】骰子由程序来掷，你绝不能自己编造骰子结果。需要掷骰时，在消息里写下指令，程序会把它变成骰子卡片：
 - [检定:技能名]：让玩家进行技能检定，如 [检定:侦查]、[检定:图书馆使用]；属性检定用 力量 / 体质 / 体型 / 敏捷 / 外貌 / 智力 / 意志 / 教育 / 幸运。
 - 难度和奖惩骰：[检定:聆听:困难]、[检定:潜行:极难]、[检定:说服:奖励1]、[检定:攀爬:惩罚1]
+- 修正成功线：剧本写了加减成功率时（如"幸运 -1d20""侦查 +10"），把修正写进指令：[检定:幸运:-1d20]、[检定:侦查:+10]，程序会掷修正骰、算出新的成功线并显示给玩家；也可以直接指定成功线：[检定:幸运:=35]。修正必须写在指令里，只在文字里说"成功线是 35"程序不会知道。COC 7 版一般用困难 / 极难和奖惩骰表示难度，剧本另有写法时才用修正。
 - 让 AI 队友检定：[检定:侦查:@名字]
 - [理智:成功损失/失败损失]：理智检定，如 [理智:0/1d3]、[理智:1/1d6]，让队友检定加 :@名字
 - [掷骰:1d6:说明]：你自己需要的随机结果，如 NPC 的反应、伤害
-- [HP:-2]、[HP:-1d6]、[MP:-1]、[SAN:-1]、[幸运:-5]：直接修改调查员的数值（不加 @名字 时默认是玩家）
+- [HP:-2]、[HP:-1d6]、[MP:-1]、[SAN:-1]、[幸运:-5]：直接修改调查员的数值（不加 @名字 时默认是玩家）。注意 [幸运:-5] 是扣掉幸运值，幸运检定要用 [检定:幸运]
 - [SAN:+1d6]、[HP:+1]：恢复理智或生命（比如结局的理智奖励）。注意 [理智:…] 只用于理智检定，奖励理智要用 [SAN:+…]
 - [成长]：模组结束时请玩家进行技能成长检定。程序会自动列出这次成功使用过的技能，负责掷骰并更新角色卡，你不需要自己列出技能或描述结果
 - [物品:+手电筒]、[物品:-旧钥匙]：调查员获得或失去物品
@@ -491,8 +496,18 @@ export function processKpCommands(room: Room, text: string, rng: Rng = Math.rand
     const isHuman = key === 'player';
 
     if (kind === '检定') {
-      const skill = plain[0];
-      if (!skill) continue;
+      if (!plain[0]) continue;
+      // 成功线修正：[检定:幸运:-1d20]、[检定:侦查:+10]、[检定:幸运:=35]，也可以写成 [检定:幸运-1d20]
+      // 先试「技能名+修正」的写法（技能名的模糊匹配会把「侦查+10」当成侦查，修正就丢了）
+      const inline = splitInlineModifier(plain[0]);
+      const useInline = !!inline.modifier && resolveTarget(sheet, inline.skill).found;
+      const skill = useInline ? inline.skill : plain[0];
+      const mods: CheckModifier[] = [];
+      if (useInline && inline.modifier) mods.push(inline.modifier);
+      for (const a of plain.slice(1)) {
+        const mod = parseCheckModifier(a);
+        if (mod) mods.push(mod);
+      }
       const difficulty: Difficulty = plain.some((a) => a.includes('极难'))
         ? 'extreme'
         : plain.some((a) => a.includes('困难'))
@@ -506,13 +521,20 @@ export function processKpCommands(room: Room, text: string, rng: Rng = Math.rand
         if (p) bonus = -Number(p[1] ?? 1);
       }
       const t = resolveTarget(sheet, skill);
+      let modified: { target: number; text: string } | undefined;
+      try {
+        if (mods.length) modified = applyCheckModifiers(t.target, mods, rng);
+      } catch (err) {
+        result.problems.push(`指令 ${raw} 的修正看不懂：${err instanceof Error ? err.message : String(err)}`);
+      }
       const roll: RollRecord = {
         type: 'check',
         actor: key,
         actorName: sheet.name,
         pending: true,
         label: t.name,
-        target: t.target,
+        target: modified ? modified.target : t.target,
+        ...(modified ? { baseTarget: t.target, modifier: modified.text } : {}),
         difficulty,
         bonus: bonus || undefined,
         note: t.found ? undefined : `角色卡里没有「${skill}」，按 5 计算`,

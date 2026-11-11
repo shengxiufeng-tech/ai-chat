@@ -152,7 +152,15 @@ export function RollCard({
             </div>
             <div className="roll-sub">
               {r.actorName} ·{' '}
-              {isSan ? `当前理智 ${r.before ?? r.target} · 损失 ${r.sanSuccess}/${r.sanFail}` : `技能值 ${r.target}`}
+              {isSan ? (
+                `当前理智 ${r.before ?? r.target} · 损失 ${r.sanSuccess}/${r.sanFail}`
+              ) : r.baseTarget !== undefined ? (
+                <span title="守秘人按剧本调整了这次检定的成功线">
+                  技能值 {r.baseTarget} · 修正 {r.modifier} → <b className="roll-target">成功线 {r.target}</b>
+                </span>
+              ) : (
+                `技能值 ${r.target}`
+              )}
             </div>
           </div>
           {!r.pending && !rolling && r.level && (

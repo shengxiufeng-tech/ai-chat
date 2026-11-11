@@ -395,6 +395,8 @@ export class RoomRunner {
       pending: false,
       label: r.label,
       target: r.target,
+      // 孤注一掷沿用同一条成功线，不重新掷修正骰
+      ...(r.baseTarget !== undefined ? { baseTarget: r.baseTarget, modifier: r.modifier } : {}),
       difficulty: r.difficulty,
       bonus: r.bonus,
       pushed: true,

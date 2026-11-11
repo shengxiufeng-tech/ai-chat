@@ -1350,6 +1350,11 @@ mark {
   font-size: 17px;
 }
 
+.roll-target {
+  color: var(--warn);
+  font-weight: 650;
+}
+
 /* 构思 / 执笔 */
 .model-pair {
   display: inline-flex;
