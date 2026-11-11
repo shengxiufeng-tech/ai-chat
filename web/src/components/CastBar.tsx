@@ -1,4 +1,4 @@
-import { Brain, X } from 'lucide-react';
+import { Brain, Lightbulb, X } from 'lucide-react';
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { effortLabel, type Participant, type Room, type RunnerState } from '../../../shared/types';
 import { patch } from '../api';
@@ -20,7 +20,7 @@ export function CastBar({ room, runner }: { room: Room; runner: RunnerState | nu
           key={p.id}
           className={`cast-pill ${open?.id === p.id ? 'open' : ''} ${runner?.generating?.participantId === p.id ? 'speaking' : ''} ${p.enabled ? '' : 'off'}`}
           style={{ '--c': p.color } as CSSProperties}
-          title={`${p.name}：${p.model || '未选择模型'}${p.reasoningEffort ? `，思考强度 ${p.reasoningEffort}` : ''}（点击切换）`}
+          title={`${p.name}：${p.planner?.enabled && p.planner.model ? `构思 ${p.planner.model}，执笔 ` : ''}${p.model || '未选择模型'}${p.reasoningEffort ? `，思考强度 ${p.reasoningEffort}` : ''}（点击切换）`}
           onClick={(e) => {
             const rect = e.currentTarget.getBoundingClientRect();
             setOpen(open?.id === p.id ? null : { id: p.id, x: rect.left, y: rect.bottom + 6 });
@@ -28,6 +28,7 @@ export function CastBar({ room, runner }: { room: Room; runner: RunnerState | nu
         >
           <span className="cast-avatar">{p.avatar}</span>
           <span className="cast-name">{p.name}</span>
+          {p.planner?.enabled && p.planner.model && <Lightbulb className="cast-planner" aria-label="先构思再执笔" />}
           <span className="cast-model">{shortModel(p.model)}</span>
           {p.reasoningEffort && (
             <span className="cast-effort">
@@ -88,7 +89,12 @@ function ModelPopover({
           <X />
         </button>
       </div>
-      <Field label="模型">
+      {p.planner?.enabled && p.planner.model && (
+        <div className="hint">
+          <Lightbulb style={{ width: 13, height: 13, verticalAlign: -2 }} /> 先由 <b>{shortModel(p.planner.model)}</b> 构思，再由下面的模型执笔。构思模型在角色的「编辑」里修改。
+        </div>
+      )}
+      <Field label={p.planner?.enabled && p.planner.model ? '执笔模型' : '模型'}>
         <ModelInput
           value={model}
           showStatus={false}

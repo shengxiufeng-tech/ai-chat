@@ -4,7 +4,8 @@ import { resolveGrowth, type InvestigatorSheet } from '../shared/coc.ts';
 import { otherSpeakerNames, stripImpersonation } from '../shared/text.ts';
 import type { Message, Participant, Room, RoomEvent, RunnerState, RunStatus } from '../shared/types.ts';
 import { DEFAULT_CONTEXT_WINDOW, fitToContext } from './context.ts';
-import { completeChat, contextWindowOf, streamChat } from './llm.ts';
+import { completeChat, contextWindowOf, streamChat, type ChatMessage } from './llm.ts';
+import { activePlanner, appendToLast, applyPlanCommands, plannerInstruction, writerBlock } from './planner.ts';
 import {
   buildKpMessages,
   buildTeammateMessages,
@@ -615,11 +616,66 @@ export class RoomRunner {
     return buildAgentMessages(room, p, history);
   }
 
+  /** 按模型的上下文窗口裁掉最早的对话；第一次裁剪时提示一下 */
+  private async fitFor(p: Participant, model: string, build: (h: Message[]) => ChatMessage[], history: Message[]) {
+    const room = this.room;
+    const settings = this.store.getSettings();
+    const window = (await contextWindowOf(settings.baseUrl, settings.apiKey, model)) ?? DEFAULT_CONTEXT_WINDOW;
+    const fit = fitToContext(build, history, window);
+    if (fit.dropped > 0) {
+      const key = `${p.id}:${model}`;
+      if (!this.trimNotified.has(key)) {
+        this.trimNotified.add(key);
+        const notebook = room.mode === 'trpg' && room.trpg?.notebook;
+        this.notice(
+          `对话已经接近「${p.name}」所用模型（${model}）的上下文上限（约 ${Math.round(window / 1000)}k），更早的消息不再发给它${notebook ? '，重要的 NPC 和线索仍然记在守秘人笔记里' : ''}。`,
+        );
+      }
+    }
+    return fit;
+  }
+
+  /** 构思阶段：让构思模型先想清楚这一轮说什么，构思内容实时显示在消息的「构思」里 */
+  private async runPlanner(p: Participant, message: Message, history: Message[], signal: AbortSignal): Promise<string> {
+    const room = this.room;
+    const settings = this.store.getSettings();
+    const planner = activePlanner(p)!;
+    const kp = room.mode === 'trpg' && p.role === 'kp';
+    const instruction = plannerInstruction({ kp, name: room.settings.promptMode === 'humanlike' ? undefined : p.name });
+    const fit = await this.fitFor(p, planner.model, (h) => appendToLast(this.buildMessages(room, p, h), instruction), history);
+    if (fit.dropped > 0) message.trimmed = Math.max(message.trimmed ?? 0, fit.dropped);
+    const stream = streamChat({
+      baseUrl: settings.baseUrl,
+      apiKey: settings.apiKey,
+      model: planner.model,
+      // 构思偏重逻辑，温度不要太高（推理模型会忽略这个参数）
+      temperature: Math.min(p.temperature, 0.7),
+      reasoningEffort: planner.reasoningEffort || undefined,
+      messages: fit.messages,
+      // 构思模型单独一个会话 id，缓存不会和执笔模型互相干扰
+      sessionId: sessionIdFor(room.id, `${p.id}-plan`),
+      signal,
+    });
+    let plan = '';
+    for await (const chunk of stream) {
+      if (!chunk.content) continue;
+      plan += chunk.content;
+      message.plan = plan;
+      this.emit({ type: 'message_delta', messageId: message.id, plan: chunk.content });
+      this.store.touchRoom(room.id);
+    }
+    plan = plan.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+    if (!plan) throw new Error('构思模型返回了空内容');
+    return plan;
+  }
+
   /** 生成一次发言，返回是否成功（被打断也算成功） */
   private async generateTurn(p: Participant): Promise<{ ok: boolean; message?: Message }> {
     const room = this.room;
     const settings = this.store.getSettings();
     const model = p.model || settings.defaultModel;
+    const planner = activePlanner(p);
+    const kp = room.mode === 'trpg' && p.role === 'kp';
 
     const history = [...room.messages];
     const message: Message = {
@@ -635,6 +691,7 @@ export class RoomRunner {
       reasoning: '',
       status: 'streaming',
       createdAt: Date.now(),
+      ...(planner ? { planner: { model: planner.model, reasoningEffort: planner.reasoningEffort || undefined }, plan: '', planning: true } : {}),
     };
 
     if (!model) {
@@ -653,21 +710,23 @@ export class RoomRunner {
     this.emitState();
 
     let ok = true;
+    let plan = '';
     try {
-      // 按模型的上下文窗口裁掉最早的对话
-      const window = (await contextWindowOf(settings.baseUrl, settings.apiKey, model)) ?? DEFAULT_CONTEXT_WINDOW;
-      const fit = fitToContext((h) => this.buildMessages(room, p, h), history, window);
-      if (fit.dropped > 0) {
-        message.trimmed = fit.dropped;
-        const key = `${p.id}:${model}`;
-        if (!this.trimNotified.has(key)) {
-          this.trimNotified.add(key);
-          const notebook = room.mode === 'trpg' && room.trpg?.notebook;
-          this.notice(
-            `对话已经接近「${p.name}」所用模型的上下文上限（约 ${Math.round(window / 1000)}k），更早的消息不再发给它${notebook ? '，重要的 NPC 和线索仍然记在守秘人笔记里' : ''}。`,
-          );
+      // 构思 / 执笔：先构思；构思失败时由执笔模型单独完成，不让整轮卡住
+      if (planner) {
+        try {
+          plan = await this.runPlanner(p, message, history, controller.signal);
+        } catch (err) {
+          if (controller.signal.aborted) throw err;
+          message.planError = err instanceof Error ? err.message : String(err);
         }
+        message.planning = false;
+        message.plan = plan || message.plan || undefined;
+        this.emit({ type: 'message_updated', message });
       }
+      const extra = plan ? writerBlock(plan, { kp }) : '';
+      const fit = await this.fitFor(p, model, (h) => appendToLast(this.buildMessages(room, p, h), extra), history);
+      if (fit.dropped > 0) message.trimmed = Math.max(message.trimmed ?? 0, fit.dropped);
       const stream = streamChat({
         baseUrl: settings.baseUrl,
         apiKey: settings.apiKey,
@@ -706,9 +765,12 @@ export class RoomRunner {
       }
     } finally {
       this.current = null;
+      delete message.planning;
     }
 
     message.content = stripNamePrefix(message.content, p.name);
+    // 守秘人：骰子、数值、笔记等指令以构思为准，执笔模型写的指令不算
+    if (plan && kp && message.status === 'done' && message.content.trim()) message.content = applyPlanCommands(message.content, plan);
     // 去掉替别人写的发言（拟人模式的对话记录没有名字标签，不需要）
     if (room.mode === 'trpg' || room.settings.promptMode !== 'humanlike') {
       const cleaned = stripImpersonation(message.content, otherSpeakerNames(room, p.id));

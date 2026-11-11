@@ -25,6 +25,15 @@ export interface Participant {
   enabled: boolean;
   /** 跑团房间里的身份：守秘人或 AI 队友 */
   role?: ParticipantRole;
+  /** 构思模型：先让它想清楚这一轮说什么，再由上面的 model 照着写出来（执笔） */
+  planner?: PlannerConfig;
+}
+
+export interface PlannerConfig {
+  enabled: boolean;
+  model: string;
+  /** 构思模型的思考强度，空字符串表示用模型默认值 */
+  reasoningEffort: string;
 }
 
 /** 角色模板（内置或用户保存的） */
@@ -101,6 +110,14 @@ export interface Message {
   filtered?: string;
   /** 回复不完整：达到输出上限 / 被内容审核截断 / 连接提前断开 */
   truncated?: 'length' | 'content_filter' | 'incomplete';
+  /** 构思 / 执笔：这条消息先由构思模型构思（model 是执笔模型） */
+  planner?: { model: string; reasoningEffort?: string };
+  /** 构思模型写的构思（只在界面上折叠显示，不会发给其他角色） */
+  plan?: string;
+  /** 生成中：还在构思阶段 */
+  planning?: boolean;
+  /** 构思失败的原因（这条由执笔模型单独写完） */
+  planError?: string;
 }
 
 export interface Room {
@@ -233,7 +250,7 @@ export type RoomEvent =
   | { type: 'room'; room: Omit<Room, 'messages'> }
   | { type: 'runner'; runner: RunnerState }
   | { type: 'message_added'; message: Message }
-  | { type: 'message_delta'; messageId: string; content?: string; reasoning?: string }
+  | { type: 'message_delta'; messageId: string; content?: string; reasoning?: string; plan?: string }
   | { type: 'message_updated'; message: Message }
   | { type: 'message_deleted'; messageId: string }
   | { type: 'messages_cleared' }

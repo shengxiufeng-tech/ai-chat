@@ -8,7 +8,7 @@ import { EffortPicker } from './EffortPicker';
 import { ModelTag } from './MessageItem';
 import { Modal } from './Modal';
 import { ModelInput } from './ModelInput';
-import { Field, Switch } from './ui';
+import { Field, Switch, ToggleRow } from './ui';
 
 export function ParticipantPanel({ room, runner }: { room: Room; runner: RunnerState | null }) {
   const [editing, setEditing] = useState<Participant | null>(null);
@@ -37,7 +37,15 @@ export function ParticipantPanel({ room, runner }: { room: Room; runner: RunnerS
                   {speaking && <span className="badge badge-accent">发言中</span>}
                 </div>
                 <div className="participant-model">
-                  {p.model ? <ModelTag model={p.model} effort={p.reasoningEffort} /> : '⚠️ 未选择模型'}
+                  {p.model ? (
+                    <ModelTag
+                      model={p.model}
+                      effort={p.reasoningEffort}
+                      planner={p.planner?.enabled && p.planner.model ? p.planner : undefined}
+                    />
+                  ) : (
+                    '⚠️ 未选择模型'
+                  )}
                 </div>
               </div>
               <div className="participant-actions">
@@ -187,9 +195,17 @@ function ParticipantEditor({
   const trpg = room.mode === 'trpg';
   const humanlike = room.settings.promptMode === 'humanlike';
 
+  const planner = d.planner ?? { enabled: false, model: '', reasoningEffort: '' };
+  const setPlanner = (patchP: Partial<typeof planner>) => set('planner', { ...planner, ...patchP });
+
   const save = async () => {
+    if (planner.enabled && !planner.model.trim()) {
+      toast('请选择构思模型，或者关掉「先让另一个模型构思」', 'error');
+      return;
+    }
     const ok = await attempt(() =>
       patch(url, {
+        ...(d.planner ? { planner: d.planner } : {}),
         name: d.name,
         avatar: d.avatar,
         color: d.color,
@@ -275,7 +291,7 @@ function ParticipantEditor({
           </div>
         </Field>
         <div className="span-2">
-          <Field label="模型">
+          <Field label={planner.enabled ? '执笔模型' : '模型'} hint={planner.enabled ? '（照着构思写出你看到的文字，可以用文笔好、便宜一些的模型）' : undefined}>
             <ModelInput value={d.model} onChange={(v) => set('model', v)} />
           </Field>
         </div>
@@ -283,6 +299,31 @@ function ParticipantEditor({
           <Field label="思考强度" hint="（推理模型思考得越久，回答通常越好，但更慢更贵）">
             <EffortPicker model={d.model} value={d.reasoningEffort} onChange={(v) => set('reasoningEffort', v)} />
           </Field>
+        </div>
+        <div className="span-2 planner-box">
+          <ToggleRow
+            label="先让另一个模型构思"
+            hint="构思模型先想清楚这一轮要说什么（剧情、逻辑、观点、规则），再由上面的模型照着写成文字。适合「逻辑强」配「文笔好」的组合。每轮会多一次模型调用，也会慢一些。"
+            checked={planner.enabled}
+            onChange={(v) => setPlanner({ enabled: v, model: planner.model || (v ? d.model : '') })}
+          />
+          {planner.enabled && (
+            <div className="form-stack" style={{ gap: 12, marginTop: 10 }}>
+              <Field label="构思模型" hint="（建议用逻辑最强的模型）">
+                <ModelInput value={planner.model} onChange={(v) => setPlanner({ model: v })} showStatus={false} />
+              </Field>
+              <Field label="构思模型的思考强度">
+                <EffortPicker model={planner.model} value={planner.reasoningEffort} onChange={(v) => setPlanner({ reasoningEffort: v })} />
+              </Field>
+              <span className="hint">
+                {planner.model && planner.model === d.model
+                  ? '⚠️ 构思和执笔现在是同一个模型。把上面的「执笔模型」换成文笔好的模型，这个功能才有意义。'
+                  : participant.role === 'kp'
+                    ? '检定、数值、笔记等指令由构思模型决定。构思会提到剧本秘密，消息里的「构思」默认收起，标着「可能剧透」。'
+                    : '构思内容会折叠显示在消息上方，其他角色看不到。'}
+              </span>
+            </div>
+          )}
         </div>
         {!humanlike && participant.role !== 'kp' && (
           <div className="span-2">

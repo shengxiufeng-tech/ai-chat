@@ -165,3 +165,59 @@ test('守秘人要求掷骰时，已经排队的队友不会抢先说话', async
     await cleanup();
   }
 });
+
+test('构思 / 执笔：构思模型决定内容和指令，执笔模型写成文字', async () => {
+  const { room, runner, cleanup } = setup();
+  try {
+    const kp = room.participants.find((p) => p.id === 'kp')!;
+    kp.planner = { enabled: true, model: 'mock/thinker', reasoningEffort: 'high' };
+    room.trpg!.started = false;
+    runner.startTrpg();
+    await until(() => kpCount(room) >= 1);
+    const msg = room.messages.find((m) => m.participantId === 'kp')!;
+    assert.deepEqual(msg.planner, { model: 'mock/thinker', reasoningEffort: 'high' });
+    assert.equal(msg.model, 'mock/fast', '消息的模型是执笔模型');
+    assert.match(msg.plan ?? '', /模拟构思/);
+    assert.match(msg.content, /^（照构思执笔）/);
+    assert.equal(msg.planning, undefined);
+    assert.equal(msg.planError, undefined);
+    // 执笔模型自己写了 [NPC] 和 [备忘]，但只执行构思里的 [NPC]
+    assert.ok(room.trpg!.notes.some((n) => n.title === '老船夫'));
+    assert.equal(room.trpg!.memos.length, 0, '执笔模型写的备忘不算');
+    assert.doesNotMatch(msg.content, /备忘/);
+  } finally {
+    await cleanup();
+  }
+});
+
+test('构思 / 执笔：构思模型出错时，由执笔模型单独写完这一轮', async () => {
+  const { room, runner, cleanup } = setup();
+  try {
+    const kp = room.participants.find((p) => p.id === 'kp')!;
+    kp.planner = { enabled: true, model: 'mock/broken', reasoningEffort: '' };
+    runner.addHumanMessage('我四处看看');
+    await until(() => kpCount(room) >= 1);
+    const msg = room.messages.find((m) => m.participantId === 'kp')!;
+    assert.match(msg.planError ?? '', /模拟的服务错误/);
+    assert.doesNotMatch(msg.content, /照构思/);
+    assert.ok(pendingRoll(room), '执笔模型自己的检定指令照常生效');
+  } finally {
+    await cleanup();
+  }
+});
+
+test('构思开关关着时，和原来完全一样', async () => {
+  const { room, runner, cleanup } = setup();
+  try {
+    const kp = room.participants.find((p) => p.id === 'kp')!;
+    kp.planner = { enabled: false, model: 'mock/thinker', reasoningEffort: '' };
+    runner.addHumanMessage('我四处看看');
+    await until(() => kpCount(room) >= 1);
+    const msg = room.messages.find((m) => m.participantId === 'kp')!;
+    assert.equal(msg.planner, undefined);
+    assert.equal(msg.plan, undefined);
+    assert.doesNotMatch(msg.content, /照构思/);
+  } finally {
+    await cleanup();
+  }
+});

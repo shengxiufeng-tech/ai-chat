@@ -29,6 +29,7 @@ function reducer(state: State, ev: RoomEvent | { type: 'reset' }): State {
                   ...m,
                   content: m.content + (ev.content ?? ''),
                   reasoning: (m.reasoning ?? '') + (ev.reasoning ?? ''),
+                  ...(ev.plan ? { plan: (m.plan ?? '') + ev.plan } : {}),
                 }
               : m,
           ),

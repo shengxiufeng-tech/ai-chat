@@ -458,7 +458,15 @@ const MOCK_LINES = [
 const mockLastPrompt = new Map<string, string>();
 
 async function* mockStream(opts: ChatOptions): AsyncGenerator<ChatChunk> {
-  yield* mockReply(opts);
+  // 测试用：一个总是出错的模型
+  if (opts.model === 'mock/broken') throw new Error('模拟的服务错误');
+  const lastUser = [...opts.messages].reverse().find((m) => m.role === 'user')?.content ?? '';
+  if (lastUser.includes('【构思任务】')) yield* mockPlan(opts, lastUser);
+  else {
+    // 构思 / 执笔：执笔模型照着构思写
+    if (lastUser.includes('【本轮构思】')) yield { content: '（照构思执笔）' };
+    yield* mockReply(opts);
+  }
   const prompt = opts.messages.map((m) => `<${m.role}>${m.content}`).join('\n');
   const key = opts.sessionId ?? '';
   const prev = mockLastPrompt.get(key) ?? '';
@@ -467,6 +475,31 @@ async function* mockStream(opts: ChatOptions): AsyncGenerator<ChatChunk> {
   while (common < prev.length && common < prompt.length && prev[common] === prompt[common]) common++;
   const input = estimateTokens(prompt);
   yield { usage: { input, output: 60, cached: key ? Math.floor(estimateTokens(prompt.slice(0, common)) / 64) * 64 : 0 } };
+}
+
+/** 模拟构思模型：给出要点和指令 */
+async function* mockPlan(opts: ChatOptions, last: string): AsyncGenerator<ChatChunk> {
+  const system = opts.messages.find((m) => m.role === 'system')?.content ?? '';
+  const kp = system.includes('跑团的守秘人');
+  const cmds = !kp
+    ? ''
+    : last.includes('请开场')
+      ? '[NPC:老船夫:撑乌篷船的老汉，沉默寡言，警告你天黑后别去镇中心的井边]'
+      : last.includes('【骰子】')
+        ? '[线索:雾中的歌声:码头附近能隐约听到女人哼唱的歌声，像是从镇中心传来]'
+        : '[检定:侦查]';
+  const text = [
+    '（模拟构思）',
+    '- 要点：回应上一句，推进一步，不替别人做决定',
+    '- 语气：自然，篇幅中等',
+    kp ? `指令：${cmds}` : '',
+  ]
+    .filter(Boolean)
+    .join('\n');
+  for (const ch of Array.from(text)) {
+    await sleep(4, opts.signal);
+    yield { content: ch };
+  }
 }
 
 async function* mockReply(opts: ChatOptions): AsyncGenerator<ChatChunk> {

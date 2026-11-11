@@ -1,5 +1,23 @@
-import { AlertCircle, BookMarked, Brain, Check, ChevronRight, Copy, Lightbulb, Pencil, RotateCcw, Scissors, Trash2, TriangleAlert, User, UserX } from 'lucide-react';
-import { memo, useState, type CSSProperties } from 'react';
+import {
+  AlertCircle,
+  BookMarked,
+  Brain,
+  Check,
+  ChevronRight,
+  Copy,
+  Lightbulb,
+  Loader2,
+  NotebookPen,
+  PenLine,
+  Pencil,
+  RotateCcw,
+  Scissors,
+  Trash2,
+  TriangleAlert,
+  User,
+  UserX,
+} from 'lucide-react';
+import { memo, useState, type CSSProperties, type ReactNode } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { stripCommands } from '../../../shared/coc';
@@ -33,10 +51,10 @@ export function splitTips(text: string) {
   return { body, tips };
 }
 
-export function ModelTag({ model, effort }: { model?: string; effort?: string }) {
-  if (!model) return null;
+function OneModel({ model, effort, icon, title }: { model: string; effort?: string; icon?: ReactNode; title: string }) {
   return (
-    <span className="msg-model" title={`${model}${effort ? ` · 思考强度 ${effort}` : ''}`}>
+    <span className="msg-model" title={title}>
+      {icon}
       {shortModel(model)}
       {effort && (
         <>
@@ -47,6 +65,21 @@ export function ModelTag({ model, effort }: { model?: string; effort?: string })
           </span>
         </>
       )}
+    </span>
+  );
+}
+
+const describe = (model: string, effort?: string) => `${model}${effort ? ` · 思考强度 ${effort}` : ''}`;
+
+/** 模型标签；用了构思 / 执笔时显示「构思模型 → 执笔模型」 */
+export function ModelTag({ model, effort, planner }: { model?: string; effort?: string; planner?: { model: string; reasoningEffort?: string } }) {
+  if (!model) return null;
+  if (!planner) return <OneModel model={model} effort={effort} title={describe(model, effort)} />;
+  return (
+    <span className="model-pair">
+      <OneModel model={planner.model} effort={planner.reasoningEffort} icon={<Lightbulb />} title={`构思：${describe(planner.model, planner.reasoningEffort)}`} />
+      <span className="model-pair-arrow">→</span>
+      <OneModel model={model} effort={effort} icon={<PenLine />} title={`执笔：${describe(model, effort)}`} />
     </span>
   );
 }
@@ -137,7 +170,7 @@ export const MessageItem = memo(function MessageItem({
             {isHuman && playerName && !m.ooc ? `${playerName}` : m.speakerName}
           </span>
           {isHuman && m.ooc && <span className="badge">场外</span>}
-          <ModelTag model={m.model} effort={m.reasoningEffort} />
+          <ModelTag model={m.model} effort={m.reasoningEffort} planner={m.planner} />
           <span className="msg-time">{time(m.createdAt)}</span>
           {m.status === 'interrupted' && <span className="badge badge-warn">被打断</span>}
           {!!m.truncated && !streaming && (
@@ -157,6 +190,11 @@ export const MessageItem = memo(function MessageItem({
           {!!m.filtered && (
             <span className="badge badge-warn" title={`模型替别人写了这些话，已自动去掉：\n\n${m.filtered.slice(0, 400)}`}>
               <UserX /> 已去掉替别人说的话
+            </span>
+          )}
+          {!!m.planError && !streaming && (
+            <span className="badge badge-warn" title={`构思模型出错了：${m.planError}\n这一条由执笔模型单独写完。`}>
+              <TriangleAlert /> 构思失败
             </span>
           )}
           {!!m.trimmed && (
@@ -190,6 +228,19 @@ export const MessageItem = memo(function MessageItem({
             </div>
           )}
         </div>
+
+        {m.planner && (m.plan || m.planning) && (
+          // 守秘人的构思会提到剧本秘密，默认收起
+          <details className="msg-reasoning msg-plan" open={!isKp && !!m.planning}>
+            <summary>
+              <ChevronRight className="chev" />
+              {m.planning ? <Loader2 className="spin" /> : <NotebookPen />}
+              {m.planning ? (isKp ? '守秘人正在构思…' : '正在构思…') : '构思'}
+              {isKp && <span className="msg-plan-warn">可能剧透</span>}
+            </summary>
+            <div className="msg-reasoning-text">{m.plan || '…'}</div>
+          </details>
+        )}
 
         {m.reasoning && (
           <details className="msg-reasoning" open={streaming && !m.content}>

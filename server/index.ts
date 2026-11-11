@@ -22,6 +22,7 @@ import { RunnerManager, sessionIdFor } from './runner.ts';
 import { BAISHUI, customScenario, improvScenario } from './scenarios.ts';
 import { classifyEra, cleanText, extractScriptText, prepareScript } from './scripts.ts';
 import { newId, normalizeRoom, Store } from './store.ts';
+import { cleanPlanner } from './planner.ts';
 import { buildAssistantMessages, kpOf, parseSuggestions } from './trpg.ts';
 
 try {
@@ -101,6 +102,7 @@ function makeParticipant(input: Partial<Participant>, room?: Room): Participant 
     temperature: typeof input.temperature === 'number' ? input.temperature : 0.8,
     enabled: input.enabled ?? true,
     ...(input.role ? { role: input.role } : {}),
+    ...(cleanPlanner(input.planner) ? { planner: cleanPlanner(input.planner) } : {}),
   };
 }
 
@@ -529,6 +531,11 @@ app.patch(
     }
     if (typeof b.temperature === 'number') p.temperature = Math.min(2, Math.max(0, b.temperature));
     if (typeof b.enabled === 'boolean') p.enabled = b.enabled;
+    if ('planner' in b) {
+      const planner = cleanPlanner(b.planner);
+      if (planner) p.planner = planner;
+      else delete p.planner;
+    }
     if (typeof b.index === 'number') {
       const from = room.participants.indexOf(p);
       const to = Math.min(room.participants.length - 1, Math.max(0, b.index));
