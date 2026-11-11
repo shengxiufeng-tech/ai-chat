@@ -288,3 +288,12 @@ test('队友：自己的数值和共享笔记在最后一条消息里', () => {
   assert.match(out.at(-1)!.content, /【调查笔记】[\s\S]*周婶：茶馆老板娘/);
   assert.doesNotMatch(out.map((m) => m.content).join('\n'), /\[NPC/);
 });
+
+test('提醒守秘人不要替调查员说话：系统提示写明边界，最后一条消息再提醒一次', () => {
+  const room = trpgRoom();
+  room.messages = [msg({ role: 'human', content: '我准备先住下', speakerName: '小明' })];
+  const kp = buildKpMessages(room, room.participants[0], room.messages);
+  assert.match(kp[0].content, /玩家和 AI 队友（「张三」、「林薇」）都会自己发言/);
+  assert.match(kp[0].content, /可以描述外界对他们的影响/); // 允许描写影响和结果，不过度限制
+  assert.match(kp.at(-1)!.content, /「林薇」会在你之后自己发言，不要替TA说台词或决定行动。）$/);
+});

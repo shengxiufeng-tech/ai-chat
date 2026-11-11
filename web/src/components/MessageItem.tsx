@@ -1,8 +1,9 @@
-import { AlertCircle, BookMarked, Brain, Check, ChevronRight, Copy, Lightbulb, Pencil, RotateCcw, Scissors, Trash2, User } from 'lucide-react';
+import { AlertCircle, BookMarked, Brain, Check, ChevronRight, Copy, Lightbulb, Pencil, RotateCcw, Scissors, Trash2, User, UserX } from 'lucide-react';
 import { memo, useState, type CSSProperties } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { stripCommands } from '../../../shared/coc';
+import { stripImpersonation } from '../../../shared/text';
 import { effortLabel, type Message } from '../../../shared/types';
 import { shortModel } from '../models';
 import { EffortMeter } from './EffortPicker';
@@ -60,6 +61,7 @@ export const MessageItem = memo(function MessageItem({
   onRoll,
   onPush,
   onOpenNotes,
+  hideNames,
 }: {
   message: Message;
   isLast: boolean;
@@ -73,6 +75,8 @@ export const MessageItem = memo(function MessageItem({
   onRoll?: (id: string) => Promise<unknown>;
   onPush?: (id: string) => Promise<unknown>;
   onOpenNotes?: () => void;
+  /** 其他人的名字：生成过程中隐藏以「【名字】：」开头的冒充段落 */
+  hideNames?: string[];
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(m.content);
@@ -106,7 +110,9 @@ export const MessageItem = memo(function MessageItem({
 
   const streaming = m.status === 'streaming';
   const isHuman = m.role === 'human';
-  const display = isKp ? stripCommands(m.content) : m.content;
+  // 生成过程中就把替别人写的段落藏起来（生成完后服务端会正式去掉）
+  const raw = streaming && hideNames?.length ? stripImpersonation(m.content, hideNames).text : m.content;
+  const display = isKp ? stripCommands(raw) : raw;
   const { body, tips } = isKp ? splitTips(display) : { body: display, tips: [] };
 
   const copy = async () => {
@@ -130,6 +136,11 @@ export const MessageItem = memo(function MessageItem({
           <ModelTag model={m.model} effort={m.reasoningEffort} />
           <span className="msg-time">{time(m.createdAt)}</span>
           {m.status === 'interrupted' && <span className="badge badge-warn">被打断</span>}
+          {!!m.filtered && (
+            <span className="badge badge-warn" title={`模型替别人写了这些话，已自动去掉：\n\n${m.filtered.slice(0, 400)}`}>
+              <UserX /> 已去掉替别人说的话
+            </span>
+          )}
           {!!m.trimmed && (
             <span className="badge" title={`生成这条消息时对话太长，最早的 ${m.trimmed} 条消息没有发给模型`}>
               <Scissors /> 省略了 {m.trimmed} 条早期消息

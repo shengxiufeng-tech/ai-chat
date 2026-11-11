@@ -18,7 +18,8 @@ import {
   Trash2,
   Users,
 } from 'lucide-react';
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { otherSpeakerNames } from '../../../shared/text';
 import { del, patch, post } from '../api';
 import { askConfirm } from '../confirm';
 import { attempt } from '../toast';
@@ -96,6 +97,19 @@ export function RoomView({
   const onRegenerate = useCallback((id: string) => void attempt(() => post(`${base}/messages/${id}/regenerate`)), [base]);
   const onRoll = useCallback((id: string) => attempt(() => post(`${base}/rolls/${id}/roll`)), [base]);
   const onPush = useCallback((id: string) => attempt(() => post(`${base}/rolls/${id}/push`)), [base]);
+  // 每个 AI 的「其他人」名单，用来在生成过程中隐藏冒充别人的段落
+  const participants = room?.participants;
+  const sheets = room?.trpg?.sheets;
+  const humanName = room?.settings.humanName;
+  const filterOn = !!room && (room.mode === 'trpg' || room.settings.promptMode !== 'humanlike');
+  const namesById = useMemo(() => {
+    const map = new Map<string, string[]>();
+    if (!room || !filterOn) return map;
+    for (const p of room.participants) map.set(p.id, otherSpeakerNames(room, p.id));
+    return map;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [participants, sheets, humanName, filterOn]);
+
   const onOpenNotes = useCallback(() => {
     setTab('notes');
     setPanelOpen(true);
@@ -293,6 +307,7 @@ export function RoomView({
                   onRoll={onRoll}
                   onPush={onPush}
                   onOpenNotes={onOpenNotes}
+                  hideNames={m.participantId ? namesById.get(m.participantId) : undefined}
                 />
               ))}
             </div>

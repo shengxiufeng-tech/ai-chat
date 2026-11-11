@@ -362,6 +362,16 @@ async function* mockStream(opts: ChatOptions): AsyncGenerator<ChatChunk> {
 
   // 跑团：模拟守秘人、AI 队友和规则助手
   if (system.includes('跑团的守秘人')) {
+    // 测试用：模拟守秘人串身份，替 AI 队友说话
+    if (last.includes('测试串身份')) {
+      const mate = system.match(/AI 队友「([^」]+)」/)?.[1] ?? '队友';
+      const text = `【${mate}（AI 队友）】：（我站起身）这里不安全，我们先找地方住下吧。\n\n（模拟守秘人）夜色彻底沉了下来，浓雾贴着门缝渗进茶馆。周婶开始收拾碗筷，准备打烊。你们打算怎么安顿？`;
+      for (const ch of Array.from(text)) {
+        await sleep(12, opts.signal);
+        yield { content: ch };
+      }
+      return;
+    }
     const afterRoll = last.includes('【骰子】');
     const opening = last.includes('请开场');
     const text = opening

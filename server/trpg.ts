@@ -119,8 +119,17 @@ const NOTEBOOK_RULES = `【守秘人笔记】
 - 只在重要 NPC 第一次登场、NPC 有了重要的新信息，或者发现关键线索时记录；一条消息里最多记一两条，不要什么都记。
 - 指令写在消息末尾即可。玩家看不到指令本身，只会看到"笔记已更新"的提示。`;
 
+/** 玩家和 AI 队友的调查员名字，用于提醒守秘人不要替他们说话 */
+function investigatorNames(room: Room) {
+  const trpg = room.trpg!;
+  return [trpg.sheets.player?.name ?? room.settings.humanName, ...teammatesOf(room).map((p) => trpg.sheets[p.id]?.name ?? p.name)]
+    .map((n) => `「${n}」`)
+    .join('、');
+}
+
 export function buildKpSystemPrompt(room: Room, kp: Participant) {
   const trpg = room.trpg!;
+  const others = investigatorNames(room);
   const parts = [
     '你是这场《克苏鲁的呼唤》第七版（COC 7th）跑团的守秘人（KP）：负责主持游戏、描述环境、扮演所有 NPC，并按规则裁定结果。',
     kp.persona.trim() ? `\n【你的主持风格】\n${kp.persona.trim()}` : '',
@@ -129,7 +138,7 @@ export function buildKpSystemPrompt(room: Room, kp: Participant) {
     `\n${trpg.scenarioSecret}`,
     `\n【主持原则】
 - 用第二人称（"你"）生动地描述场景和 NPC 的言行，一般 150~300 字，结尾把选择交还给玩家（比如"你打算怎么做？"）。
-- 绝不替玩家决定调查员的行动、想法或台词；AI 队友的行动由他们自己说，你只描述结果。
+- 你的回复只代表守秘人：描述环境、扮演 NPC、裁定结果。${others ? `玩家和 AI 队友（${others}）都会自己发言：` : '玩家会自己发言：'}不要替他们说台词、替他们思考或决定行动，也不要用「【名字】：」的格式写任何人的发言。你可以描述外界对他们的影响（比如冷风让人打了个寒颤），以及他们已经说出的行动带来的结果。
 - 让玩家通过调查一步步发现线索，不要一次性给出答案；玩家卡住时，可以通过 NPC 或环境给出提示。
 - 剧本里的真相只有你知道，绝不能直接透露；不要提到"剧本""真相"这些词。
 - 标记为"场外"的发言是玩家本人在提问（比如问规则），用一两句话以守秘人的身份回答，不推进剧情。
@@ -185,7 +194,12 @@ export function buildKpMessages(room: Room, kp: Participant, history: Message[])
     if (turns[0].role === 'assistant') turns.unshift({ role: 'user', content: '（游戏开始）' });
     if (turns[turns.length - 1].role === 'assistant') turns.push({ role: 'user', content: '（请继续主持）' });
   }
-  turns[turns.length - 1].content += `\n\n${kpStateBlock(room)}`;
+  // 最后一条消息末尾：当前状态 + 一句提醒（离生成位置最近，最不容易被忽略）
+  const mates = teammatesOf(room).map((p) => room.trpg!.sheets[p.id]?.name ?? p.name);
+  const reminder = mates.length
+    ? `（请以守秘人的身份继续。${mates.map((n) => `「${n}」`).join('、')}会在你之后自己发言，不要替${mates.length > 1 ? '他们' : 'TA'}说台词或决定行动。）`
+    : '（请以守秘人的身份继续，不要替玩家说台词或决定行动。）';
+  turns[turns.length - 1].content += `\n\n${kpStateBlock(room)}\n\n${reminder}`;
   return [{ role: 'system', content: buildKpSystemPrompt(room, kp) }, ...turns];
 }
 
@@ -201,6 +215,7 @@ export function buildTeammateMessages(room: Room, self: Participant, history: Me
     `\n【原则】
 - 用第一人称说出你的调查员的台词和行动，简短（一般 30~100 字）。
 - 只描述你想做什么、说什么，不要描述行动的结果，不要扮演 NPC 或守秘人，也不要编造骰子结果。
+- 只说你自己的话，不要用「【名字】：」的格式替别人发言。
 - 你是配角：配合和支持人类玩家，可以提出建议或分头行动，但重大决定留给人类玩家，不要抢戏。
 - 人类玩家是跑团新手，必要时可以用角色的口吻给一点提示。`,
   ].filter(Boolean);

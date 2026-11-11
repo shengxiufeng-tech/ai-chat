@@ -97,6 +97,8 @@ export interface Message {
   note?: NoteEvent;
   /** 生成这条消息时，因为上下文太长而没有发给模型的早期消息条数 */
   trimmed?: number;
+  /** 模型替别人写的发言，已经从正文里去掉（保留在这里供查看） */
+  filtered?: string;
 }
 
 export interface Room {

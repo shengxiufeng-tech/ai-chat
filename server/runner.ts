@@ -1,6 +1,7 @@
 // 对话调度：决定谁发言、调用模型、处理插话 / 暂停 / 打断
 
 import type { InvestigatorSheet } from '../shared/coc.ts';
+import { otherSpeakerNames, stripImpersonation } from '../shared/text.ts';
 import type { Message, Participant, Room, RoomEvent, RunnerState, RunStatus } from '../shared/types.ts';
 import { DEFAULT_CONTEXT_WINDOW, fitToContext } from './context.ts';
 import { completeChat, contextWindowOf, streamChat } from './llm.ts';
@@ -617,6 +618,14 @@ export class RoomRunner {
     }
 
     message.content = stripNamePrefix(message.content, p.name);
+    // 去掉替别人写的发言（拟人模式的对话记录没有名字标签，不需要）
+    if (room.mode === 'trpg' || room.settings.promptMode !== 'humanlike') {
+      const cleaned = stripImpersonation(message.content, otherSpeakerNames(room, p.id));
+      if (cleaned.removed) {
+        message.content = cleaned.text;
+        message.filtered = cleaned.removed;
+      }
+    }
     message.reasoning = message.reasoning?.trim() || undefined;
 
     const stillThere = room.messages.includes(message);
@@ -627,7 +636,7 @@ export class RoomRunner {
     } else if (stillThere) {
       if (message.status === 'done' && !message.content) {
         message.status = 'error';
-        message.error = '模型返回了空内容';
+        message.error = message.filtered ? '模型只写了替别人说的话，已经被移除。可以点「重试」重新生成。' : '模型返回了空内容';
         ok = false;
       }
       this.emit({ type: 'message_updated', message });
