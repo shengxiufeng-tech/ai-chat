@@ -96,7 +96,8 @@ export function RoomView({
   const onDelete = useCallback((id: string) => void attempt(() => del(`${base}/messages/${id}`)), [base]);
   const onRegenerate = useCallback((id: string) => void attempt(() => post(`${base}/messages/${id}/regenerate`)), [base]);
   const onRoll = useCallback((id: string) => attempt(() => post(`${base}/rolls/${id}/roll`)), [base]);
-  const onPush = useCallback((id: string) => attempt(() => post(`${base}/rolls/${id}/push`)), [base]);
+  const onPush = useCallback((id: string, how?: string) => attempt(() => post(`${base}/rolls/${id}/push`, { how })), [base]);
+  const onAccept = useCallback((id: string) => attempt(() => post(`${base}/rolls/${id}/accept`)), [base]);
   // 每个 AI 的「其他人」名单，用来在生成过程中隐藏冒充别人的段落
   const participants = room?.participants;
   const sheets = room?.trpg?.sheets;
@@ -306,6 +307,7 @@ export function RoomView({
                   onRegenerate={onRegenerate}
                   onRoll={onRoll}
                   onPush={onPush}
+                  onAccept={onAccept}
                   onOpenNotes={onOpenNotes}
                   hideNames={m.participantId ? namesById.get(m.participantId) : undefined}
                 />

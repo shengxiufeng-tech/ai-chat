@@ -1,4 +1,4 @@
-import { Brain, Clover, Dices, Flame, Heart, Package, Sparkles, TriangleAlert } from 'lucide-react';
+import { Brain, Clover, Dices, Flame, Heart, Package, Sparkles, TrendingUp, TriangleAlert } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { DIFFICULTY_LABELS, LEVEL_LABELS, thresholds, type RollRecord } from '../../../shared/coc';
 
@@ -9,15 +9,20 @@ export function RollCard({
   canAct,
   onRoll,
   onPush,
+  onAccept,
 }: {
   roll: RollRecord;
   /** 这次掷骰属于人类玩家 */
   canAct: boolean;
   onRoll: () => Promise<unknown>;
-  onPush: () => Promise<unknown>;
+  /** 孤注一掷，how 是玩家说明怎么更努力地尝试 */
+  onPush: (how?: string) => Promise<unknown>;
+  onAccept: () => Promise<unknown>;
 }) {
   const [rolling, setRolling] = useState(false);
   const [flicker, setFlicker] = useState(0);
+  const [pushing, setPushing] = useState(false);
+  const [how, setHow] = useState('');
 
   useEffect(() => {
     if (!rolling) return;
@@ -50,6 +55,52 @@ export function RollCard({
             </span>
           )}
           {r.note && <span className="badge badge-danger">{r.note}</span>}
+        </div>
+      </div>
+    );
+  }
+
+  if (r.type === 'growth') {
+    const list = r.growth ?? [];
+    return (
+      <div className="roll-row">
+        <div className={`roll-card ${r.pending ? 'pending' : ''}`}>
+          <div className="roll-head">
+            <div className="roll-icon">
+              <TrendingUp />
+            </div>
+            <div className="grow">
+              <div className="roll-title">技能成长检定</div>
+              <div className="roll-sub">
+                {r.actorName} · 这次成功使用过的 {list.length} 项技能
+              </div>
+            </div>
+          </div>
+          <div className="growth-list">
+            {list.map((g) => (
+              <div key={g.skill} className={`growth-row ${g.gain ? 'up' : ''}`}>
+                <span className="name">{g.skill}</span>
+                {r.pending || rolling ? (
+                  <span className="val">{g.before}</span>
+                ) : g.gain ? (
+                  <span className="val">
+                    {g.before} → <b>{g.after}</b> <span className="badge badge-ok">+{g.gain}</span>
+                  </span>
+                ) : (
+                  <span className="val dim">没有成长</span>
+                )}
+                {!r.pending && !rolling && <span className="hint">掷出 {g.roll}</span>}
+              </div>
+            ))}
+          </div>
+          {r.pending && !rolling && canAct && (
+            <div className="roll-actions">
+              <button className="btn btn-primary roll-dice-btn" onClick={() => doRoll(onRoll)}>
+                <Dices /> 全部掷骰
+              </button>
+              <span className="hint">每项掷 1d100，大于当前技能值（或者掷出 96 以上）就成长 1d10 点。技能用得越熟练越难再进步。</span>
+            </div>
+          )}
         </div>
       </div>
     );
@@ -186,18 +237,45 @@ export function RollCard({
           </div>
         )}
 
-        {!r.pending && !rolling && canAct && r.pushable && !r.pushedAlready && (
-          <div className="roll-actions">
-            <button
-              className="btn btn-sm btn-warn"
-              onClick={() => doRoll(onPush)}
-              title="说明你如何更努力地尝试，然后重骰一次；如果再失败，后果会很严重"
-            >
-              <Flame /> 孤注一掷
-            </button>
-            <span className="hint">再试一次，但失败的后果会更严重。可以先在输入框里描述你怎么更努力地尝试。</span>
+        {!r.pending && !rolling && canAct && r.decision === 'pending' && !pushing && (
+          <div className="decision">
+            <div className="decision-text">
+              <Flame /> 检定失败了。你可以接受这个结果，也可以「孤注一掷」再试一次——但如果再失败，后果会更严重。
+            </div>
+            <div className="roll-actions">
+              <button className="btn btn-sm" onClick={() => void onAccept()}>
+                接受失败
+              </button>
+              <button className="btn btn-sm btn-warn" onClick={() => setPushing(true)}>
+                <Flame /> 孤注一掷
+              </button>
+              <span className="hint">直接在下方输入新的行动，也算接受失败。</span>
+            </div>
           </div>
         )}
+
+        {!r.pending && !rolling && canAct && r.decision === 'pending' && pushing && (
+          <div className="decision">
+            <div className="decision-text">按规则，孤注一掷前要说明你打算怎么更努力地尝试（可以不写）：</div>
+            <textarea
+              rows={2}
+              value={how}
+              autoFocus
+              onChange={(e) => setHow(e.target.value)}
+              placeholder="例如：我不顾灰尘趴在地上，一寸一寸地摸遍床底和墙角"
+            />
+            <div className="roll-actions">
+              <button className="btn btn-sm" onClick={() => setPushing(false)}>
+                返回
+              </button>
+              <button className="btn btn-sm btn-warn" onClick={() => doRoll(() => onPush(how))}>
+                <Dices /> 孤注一掷，重新掷骰
+              </button>
+            </div>
+          </div>
+        )}
+
+
       </div>
     </div>
   );

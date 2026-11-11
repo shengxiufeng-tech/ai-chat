@@ -2012,6 +2012,77 @@ mark {
   }
 }
 
+/* 检定失败后的选择 */
+.decision {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--warn-soft);
+}
+
+.decision-text {
+  font-size: 12.5px;
+  color: var(--text);
+  line-height: 1.6;
+}
+
+.decision-text svg {
+  width: 13px;
+  height: 13px;
+  color: var(--warn);
+  vertical-align: -2px;
+}
+
+.decision textarea {
+  font-size: 13px;
+  resize: vertical;
+}
+
+/* 技能成长 */
+.growth-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.growth-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  padding: 4px 8px;
+  border-radius: 7px;
+  background: var(--surface-2);
+}
+
+.growth-row .name {
+  flex: 1;
+}
+
+.growth-row .val {
+  font-variant-numeric: tabular-nums;
+}
+
+.growth-row .val.dim {
+  color: var(--text-3);
+}
+
+.growth-row.up .val b {
+  color: var(--ok);
+}
+
+.growth-entry {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: flex-start;
+}
+
 .stat-chip {
   display: inline-flex;
   align-items: center;

@@ -1,4 +1,4 @@
-import { AlertCircle, BookMarked, Brain, Check, ChevronRight, Copy, Lightbulb, Pencil, RotateCcw, Scissors, Trash2, User, UserX } from 'lucide-react';
+import { AlertCircle, BookMarked, Brain, Check, ChevronRight, Copy, Lightbulb, Pencil, RotateCcw, Scissors, Trash2, TriangleAlert, User, UserX } from 'lucide-react';
 import { memo, useState, type CSSProperties } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -61,6 +61,7 @@ export const MessageItem = memo(function MessageItem({
   onRegenerate,
   onRoll,
   onPush,
+  onAccept,
   onOpenNotes,
   hideNames,
 }: {
@@ -74,7 +75,8 @@ export const MessageItem = memo(function MessageItem({
   onDelete: (id: string) => void;
   onRegenerate: (id: string) => void;
   onRoll?: (id: string) => Promise<unknown>;
-  onPush?: (id: string) => Promise<unknown>;
+  onPush?: (id: string, how?: string) => Promise<unknown>;
+  onAccept?: (id: string) => Promise<unknown>;
   onOpenNotes?: () => void;
   /** 其他人的名字：生成过程中隐藏以「【名字】：」开头的冒充段落 */
   hideNames?: string[];
@@ -104,7 +106,8 @@ export const MessageItem = memo(function MessageItem({
         roll={m.roll}
         canAct={m.roll.actor === 'player'}
         onRoll={() => onRoll?.(m.id) ?? Promise.resolve()}
-        onPush={() => onPush?.(m.id) ?? Promise.resolve()}
+        onPush={(how) => onPush?.(m.id, how) ?? Promise.resolve()}
+        onAccept={() => onAccept?.(m.id) ?? Promise.resolve()}
       />
     );
   }
@@ -137,6 +140,20 @@ export const MessageItem = memo(function MessageItem({
           <ModelTag model={m.model} effort={m.reasoningEffort} />
           <span className="msg-time">{time(m.createdAt)}</span>
           {m.status === 'interrupted' && <span className="badge badge-warn">被打断</span>}
+          {!!m.truncated && !streaming && (
+            <span
+              className="badge badge-warn"
+              title={
+                m.truncated === 'length'
+                  ? '回复达到了输出长度上限，被截断了。可以点「重新生成」；如果经常这样，试试调低这个 AI 的思考强度（思考过程也占输出长度）'
+                  : m.truncated === 'content_filter'
+                    ? '回复被服务商的内容审核截断了'
+                    : '连接在回复结束前断开了（可能是网络或路由切换），可以点「重新生成」'
+              }
+            >
+              <TriangleAlert /> 回复不完整
+            </span>
+          )}
           {!!m.filtered && (
             <span className="badge badge-warn" title={`模型替别人写了这些话，已自动去掉：\n\n${m.filtered.slice(0, 400)}`}>
               <UserX /> 已去掉替别人说的话

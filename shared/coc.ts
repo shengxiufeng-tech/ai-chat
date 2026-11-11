@@ -104,7 +104,7 @@ export const NOTE_KIND_LABELS: Record<NoteKind, string> = { npc: 'NPC', clue: '�
 
 export type Difficulty = 'regular' | 'hard' | 'extreme';
 export type SuccessLevel = 'critical' | 'extreme' | 'hard' | 'regular' | 'fail' | 'fumble';
-export type RollType = 'check' | 'san' | 'dice' | 'stat';
+export type RollType = 'check' | 'san' | 'dice' | 'stat' | 'growth';
 export type StatKey = 'HP' | 'MP' | 'SAN' | '幸运' | '物品';
 
 export interface RollRecord {
@@ -132,6 +132,13 @@ export interface RollRecord {
   pushable?: boolean;
   /** 已经孤注一掷过了 */
   pushedAlready?: boolean;
+  /**
+   * 失败后的选择：pending = 等玩家决定接受失败还是孤注一掷（守秘人这时还不会描述后果），
+   * accepted = 接受失败，pushed = 已经孤注一掷
+   */
+  decision?: 'pending' | 'accepted' | 'pushed';
+  // 技能成长
+  growth?: GrowthEntry[];
   // 理智检定
   sanSuccess?: string;
   sanFail?: string;
@@ -149,6 +156,15 @@ export interface RollRecord {
   itemAdded?: boolean;
   /** 说明 */
   note?: string;
+}
+
+export interface GrowthEntry {
+  skill: string;
+  before: number;
+  roll?: number;
+  /** 成长的点数（没成长为 0） */
+  gain?: number;
+  after?: number;
 }
 
 export type Rng = () => number;
@@ -734,7 +750,8 @@ export function resolveTarget(sheet: InvestigatorSheet, rawName: string): { name
 // ---------------- 文本 ----------------
 
 /** 守秘人指令的正则：[检定:侦查]、【理智：1/1d6】等 */
-export const COMMAND_RE = /[[【]\s*(检定|理智|掷骰|HP|MP|SAN|幸运|物品|NPC|线索|备忘)\s*[:：]\s*([^\]】\n]{1,240})[\]】]/gi;
+export const COMMAND_RE =
+  /[[【]\s*(检定|理智|掷骰|HP|MP|SAN|幸运|物品|NPC|线索|备忘|成长)\s*(?:[:：]\s*([^\]】\n]{1,240}))?[\]】]/gi;
 
 /** 去掉消息里的守秘人指令（显示用） */
 export function stripCommands(text: string) {
@@ -753,7 +770,15 @@ export function rollText(r: RollRecord): string {
       const dice = r.bonus ? `，${r.bonus > 0 ? `奖励骰 ${r.bonus}` : `惩罚骰 ${-r.bonus}`}` : '';
       const head = `${who} 进行「${r.label}」检定（技能值 ${r.target}${req}${dice}）${r.pushed ? '【孤注一掷】' : ''}`;
       if (r.pending) return `${head}：等待掷骰`;
-      return `${head}：掷出 ${r.total} → ${LEVEL_LABELS[r.level!]}，${r.success ? '检定成功' : '检定失败'}`;
+      const choice =
+        r.success || !r.decision
+          ? ''
+          : r.decision === 'pending'
+            ? '（玩家正在考虑要不要孤注一掷）'
+            : r.decision === 'accepted'
+              ? '（玩家接受了失败）'
+              : '（玩家选择孤注一掷，见下一次掷骰）';
+      return `${head}：掷出 ${r.total} → ${LEVEL_LABELS[r.level!]}，${r.success ? '检定成功' : '检定失败'}${choice}`;
     }
     case 'san': {
       const head = `${who} 进行理智检定（当前 SAN ${r.before ?? r.target}，损失 ${r.sanSuccess}/${r.sanFail}）`;
@@ -762,10 +787,44 @@ export function rollText(r: RollRecord): string {
     }
     case 'dice':
       return `掷骰 ${r.expression}${r.note ? `（${r.note}）` : ''}：${r.detail}`;
+    case 'growth': {
+      const list = r.growth ?? [];
+      if (r.pending) return `${who} 等待进行技能成长检定（${list.map((g) => g.skill).join('、') || '没有可以成长的技能'}）`;
+      const parts = list.map((g) =>
+        g.gain ? `${g.skill} ${g.before} → ${g.after}（掷出 ${g.roll}，+${g.gain}）` : `${g.skill} 没有成长（掷出 ${g.roll}）`,
+      );
+      return `${who} 的技能成长检定：${parts.join('；') || '没有可以成长的技能'}`;
+    }
     case 'stat':
       if (r.stat === '物品') return `${who} ${r.itemAdded ? '获得' : '失去'}物品：${r.item}`;
       return `${who} 的 ${r.stat} ${r.before} → ${r.after}（${r.delta! >= 0 ? '+' : ''}${r.delta}${r.detail ? `，${r.detail}` : ''}）${r.note ? `。${r.note}` : ''}`;
   }
+}
+
+/** 不能通过使用成长的技能（COC 7 规则：信用评级、克苏鲁神话不做成长检定） */
+export const NO_GROWTH = ['信用评级', '克苏鲁神话'];
+
+/**
+ * 技能成长检定：每项掷 1d100，结果大于当前技能值（或者 96 以上）就成长 1d10 点，最高 99。
+ * 会直接修改角色卡。
+ */
+export function resolveGrowth(r: RollRecord, sheet: InvestigatorSheet, rng: Rng = Math.random) {
+  for (const g of r.growth ?? []) {
+    const before = sheet.skills[g.skill] ?? g.before;
+    const roll = rollD100(0, rng).total;
+    g.before = before;
+    g.roll = roll;
+    if (roll > before || roll >= 96) {
+      g.gain = rollDie(10, rng);
+      g.after = Math.min(99, before + g.gain);
+      g.gain = g.after - before;
+      sheet.skills[g.skill] = g.after;
+    } else {
+      g.gain = 0;
+      g.after = before;
+    }
+  }
+  r.pending = false;
 }
 
 /** 给守秘人 / 队友看的角色卡摘要 */

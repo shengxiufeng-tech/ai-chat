@@ -99,6 +99,8 @@ export interface Message {
   trimmed?: number;
   /** 模型替别人写的发言，已经从正文里去掉（保留在这里供查看） */
   filtered?: string;
+  /** 回复不完整：达到输出上限 / 被内容审核截断 / 连接提前断开 */
+  truncated?: 'length' | 'content_filter' | 'incomplete';
 }
 
 export interface Room {

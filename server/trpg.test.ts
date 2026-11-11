@@ -390,3 +390,70 @@ test('缓存友好：同一个 AI 连续两次请求共享前缀（守秘人、�
   );
   assertSharedPrefix(b1, buildAgentMessages(chat, b, chat.messages));
 });
+
+test('[理智:+1d6] 是恢复理智，不是理智检定（结局奖励）', () => {
+  const room = trpgRoom();
+  const sheet = room.trpg!.sheets.player;
+  sheet.san.current = 30;
+  const res = processKpCommands(room, '你们活下来了。[理智:+1d6] [SAN:+2]', () => 0.5);
+  assert.equal(res.pendingHuman, 0);
+  assert.deepEqual(
+    res.rolls.map((r) => [r.type, r.stat, r.delta]),
+    [
+      ['stat', 'SAN', 4],
+      ['stat', 'SAN', 2],
+    ],
+  );
+  assert.equal(sheet.san.current, 36);
+  // 理智检定没有参数时忽略，不会默认成 0/1
+  assert.equal(processKpCommands(room, '[理智]').rolls.length, 0);
+});
+
+test('心理学检定不能孤注一掷', () => {
+  const r: RollRecord = { type: 'check', actor: 'player', actorName: '张三', pending: true, label: '心理学', target: 50 };
+  resolveCheck(r, () => 0.75); // 77 → 失败
+  assert.equal(r.success, false);
+  assert.equal(r.pushable, false);
+});
+
+test('技能成长：只算成功过的普通技能，结果写回角色卡', async () => {
+  const { resolveGrowth } = await import('../shared/coc.ts');
+  const { growthCandidates } = await import('./trpg.ts');
+  const room = trpgRoom();
+  const sheet = room.trpg!.sheets.player;
+  sheet.skills['侦查'] = 60;
+  sheet.skills['聆听'] = 50;
+  const check = (label: string, success: boolean, actor = 'player'): Message =>
+    msg({ role: 'system', kind: 'roll', roll: { type: 'check', actor, actorName: 'x', pending: false, label, target: 50, success } });
+  room.messages = [
+    check('侦查', true),
+    check('侦查', true),
+    check('聆听', true),
+    check('图书馆使用', false), // 失败的不算
+    check('信用评级', true), // 信用评级不成长
+    check('力量', true), // 属性检定不成长
+    check('潜行', true, 'mate'), // 队友的不算
+  ];
+  assert.deepEqual(growthCandidates(room), ['侦查', '聆听']);
+
+  const res = processKpCommands(room, '模组结束。[成长]');
+  assert.equal(res.rolls.length, 1);
+  const card = res.rolls[0];
+  assert.equal(card.type, 'growth');
+  assert.equal(card.pending, true);
+  assert.equal(res.pendingHuman, 0); // 不会挡住守秘人
+  assert.equal(stripCommands('模组结束。[成长]'), '模组结束。');
+
+  // 掷 77：侦查 60 → 成长；聆听 50 → 成长（都大于技能值）
+  resolveGrowth(card, sheet, () => 0.75);
+  assert.equal(card.pending, false);
+  assert.deepEqual(card.growth!.map((g) => [g.skill, g.roll, g.gain! > 0]), [
+    ['侦查', 77, true],
+    ['聆听', 77, true],
+  ]);
+  assert.equal(sheet.skills['侦查'], 60 + card.growth![0].gain!);
+
+  // 成长检定之后，旧的成功不再计入
+  room.messages.push(msg({ role: 'system', kind: 'roll', roll: card }));
+  assert.deepEqual(growthCandidates(room), []);
+});

@@ -2,6 +2,7 @@
 
 import {
   COMMAND_RE,
+  NO_GROWTH,
   NOTE_KIND_LABELS,
   type Difficulty,
   type InvestigatorSheet,
@@ -57,7 +58,8 @@ const RULES_CHEATSHEET = `COC 7 规则要点：
 - 检定：掷 1d100（01~100），结果 ≤ 技能值就成功；≤ 技能值的一半是困难成功；≤ 五分之一是极难成功；01 是大成功；100 是大失败（技能值低于 50 时 96~100 都是大失败）。
 - 守秘人可以要求"困难"或"极难"检定，这时必须达到对应的成功等级才算成功。
 - 奖励骰 / 惩罚骰：多掷一个十位骰，奖励骰取低的那个，惩罚骰取高的那个。
-- 孤注一掷：普通技能检定失败后，玩家可以说明怎样更努力地尝试，然后重骰一次；如果再次失败，会有严重的后果。理智、幸运和战斗相关的检定不能孤注一掷。
+- 孤注一掷：普通技能检定失败后，玩家可以说明怎样更努力地尝试，然后重骰一次；如果再次失败，会有严重的后果。理智、幸运、心理学和战斗相关的检定不能孤注一掷。
+- 技能成长：模组结束后，可以对这次成功使用过的技能做成长检定：掷 1d100，大于当前技能值（或 96 以上）就成长 1d10 点。
 - 理智（SAN）：遇到恐怖的事物要进行理智检定，成功失去较少理智，失败失去较多（写作"成功损失/失败损失"，如 1/1d6）。一次失去 5 点以上可能陷入临时性疯狂，理智归零则永久疯狂。
 - 生命值（HP）：受伤会扣除；一次失去最大生命值一半以上是重伤；归零会昏迷或濒死。急救成功可以恢复 1 点。
 - 调查员是普通人，不是超级英雄；遇到怪物时逃跑往往是明智的选择。`;
@@ -150,6 +152,7 @@ export function buildKpSystemPrompt(room: Room, kp: Participant) {
 - 用第二人称（"你"）生动地描述场景和 NPC 的言行，一般 150~300 字，结尾把选择交还给玩家（比如"你打算怎么做？"）。
 - 你的回复只代表守秘人：描述环境、扮演 NPC、裁定结果。${others ? `玩家和 AI 队友（${others}）都会自己发言：` : '玩家会自己发言：'}不要替他们说台词、替他们思考或决定行动，也不要用「【名字】：」的格式写任何人的发言。你可以描述外界对他们的影响（比如冷风让人打了个寒颤），以及他们已经说出的行动带来的结果。
 - 让玩家通过调查一步步发现线索，不要一次性给出答案；玩家卡住时，可以通过 NPC 或环境给出提示。
+- 节奏要循序渐进：一个场景通常只揭示一两条新线索。愿意帮忙的 NPC 一般在玩家卡住时才出场，而且只给方向或一部分信息，不要一口气把真相全部说出来。
 - 剧本里的真相只有你知道，绝不能直接透露；不要提到"剧本""真相"这些词。
 - 标记为"场外"的发言是玩家本人在提问（比如问规则），用一两句话以守秘人的身份回答，不推进剧情。
 - 保持神秘紧张的氛围，恐怖靠暗示而不是血腥描写。${
@@ -164,11 +167,13 @@ export function buildKpSystemPrompt(room: Room, kp: Participant) {
 - [理智:成功损失/失败损失]：理智检定，如 [理智:0/1d3]、[理智:1/1d6]，让队友检定加 :@名字
 - [掷骰:1d6:说明]：你自己需要的随机结果，如 NPC 的反应、伤害
 - [HP:-2]、[HP:-1d6]、[MP:-1]、[SAN:-1]、[幸运:-5]：直接修改调查员的数值（不加 @名字 时默认是玩家）
+- [SAN:+1d6]、[HP:+1]：恢复理智或生命（比如结局的理智奖励）。注意 [理智:…] 只用于理智检定，奖励理智要用 [SAN:+…]
+- [成长]：模组结束时请玩家进行技能成长检定。程序会自动列出这次成功使用过的技能，负责掷骰并更新角色卡，你不需要自己列出技能或描述结果
 - [物品:+手电筒]、[物品:-旧钥匙]：调查员获得或失去物品
 指令规则：
 - 只在结果不确定、而且成败都有意义时才要求检定。一次只要求一个检定（理智检定除外），把指令写在消息末尾，然后停下来等结果，不要提前描述检定的结果。
 - 收到【骰子】结果后，根据成功等级描述后果。失败也要让剧情推进（付出代价、引来麻烦、浪费时间），不要只说"什么都没发现"。
-- 玩家可以对失败的普通技能检定"孤注一掷"重骰一次；孤注一掷再失败时，要给出严重的后果。`,
+- 玩家可以对失败的普通技能检定"孤注一掷"重骰一次（理智、幸运、心理学和战斗相关的检定不能）。玩家掷骰失败后会先决定要不要孤注一掷，【骰子】结果里会写明玩家的选择；如果玩家选择孤注一掷，你会先收到 TA 打算怎么更努力，再收到重骰的结果。孤注一掷再失败时，要给出严重的后果。`,
     trpg.notebook ? `\n${NOTEBOOK_RULES}` : '',
     trpg.memo ? `\n${MEMO_RULES}` : '',
   ];
@@ -227,6 +232,7 @@ export function buildTeammateMessages(room: Room, self: Participant, history: Me
 - 用第一人称说出你的调查员的台词和行动，简短（一般 30~100 字）。
 - 只描述你想做什么、说什么，不要描述行动的结果，不要扮演 NPC 或守秘人，也不要编造骰子结果。
 - 只说你自己的话，不要用「【名字】：」的格式替别人发言。
+- 守秘人叙述里的「你」指的是人类玩家的调查员「${playerName(room)}」，不是你；守秘人提到你时会直接叫你的名字「${name}」。别把发生在玩家身上的事（受伤、看到的东西）当成发生在自己身上。
 - 你是配角：配合和支持人类玩家，可以提出建议或分头行动，但重大决定留给人类玩家，不要抢戏。
 - 人类玩家是跑团新手，必要时可以用角色的口吻给一点提示。`,
   ].filter(Boolean);
@@ -302,7 +308,7 @@ export function parseSuggestions(text: string): string[] {
 
 // ---------------- 骰子结算 ----------------
 
-const UNPUSHABLE = ['幸运', '理智', '斗殴', '闪避', '射击'];
+const UNPUSHABLE = ['幸运', '理智', '心理学', '斗殴', '闪避', '射击'];
 
 export function resolveCheck(r: RollRecord, rng: Rng = Math.random) {
   const d = rollD100(r.bonus ?? 0, rng);
@@ -409,7 +415,7 @@ export function processKpCommands(room: Room, text: string, rng: Rng = Math.rand
     if (seen.has(raw)) continue;
     seen.add(raw);
     const kind = m[1].toUpperCase();
-    const args = m[2]
+    const args = (m[2] ?? '')
       .split(/[:：]/)
       .map((a) => a.trim())
       .filter(Boolean);
@@ -446,7 +452,14 @@ export function processKpCommands(room: Room, text: string, rng: Rng = Math.rand
       continue;
     }
 
+    if (kind === '成长') {
+      const roll = growthRecord(room);
+      if (roll) result.rolls.push(roll);
+      continue;
+    }
+
     if (kind === '掷骰') {
+      if (!plain[0]) continue;
       try {
         const r = rollExpression(plain[0] ?? '1d6', rng);
         result.rolls.push({
@@ -502,13 +515,20 @@ export function processKpCommands(room: Room, text: string, rng: Rng = Math.rand
       };
       if (!isHuman || trpg.autoRoll) {
         resolveCheck(roll, rng);
+        // 自动掷骰时守秘人会马上接着描述，不再提供孤注一掷
+        if (!roll.success) roll.pushable = false;
         result.needContinue = true;
       } else {
         result.pendingHuman++;
       }
       result.rolls.push(roll);
+    } else if (kind === '理智' && /^[+＋]/.test(plain[0] ?? '')) {
+      // [理智:+1d6] 是恢复理智（比如结局奖励），不是理智检定
+      const ev = statChange(sheet, 'SAN', (plain[0] ?? '').replace('＋', '+'), rng, result);
+      if (ev) result.rolls.push({ ...ev, actor: key, actorName: sheet.name });
     } else if (kind === '理智') {
-      const [succ, fail] = (plain[0] ?? '0/1').split(/[/／]/).map((x) => x.trim());
+      if (!plain[0]) continue;
+      const [succ, fail] = plain[0].split(/[/／]/).map((x) => x.trim());
       const roll: RollRecord = {
         type: 'san',
         actor: key,
@@ -551,43 +571,77 @@ export function processKpCommands(room: Room, text: string, rng: Rng = Math.rand
       });
     } else {
       const stat = (kind === '幸运' ? '幸运' : kind) as StatName;
-      const spec = (plain[0] ?? '').replace(/\s+/g, '').replace('＋', '+').replace('－', '-');
-      const sign = spec.startsWith('+') ? 1 : -1; // 不写符号时默认是扣除
-      const magnitude = spec.replace(/^[+-]/, '');
-      let amount: number;
-      let detail: string | undefined;
-      try {
-        if (/d/i.test(magnitude)) {
-          const r = rollExpression(magnitude, rng);
-          amount = r.total;
-          detail = r.detail;
-        } else {
-          amount = Number(magnitude);
-        }
-      } catch (err) {
-        result.problems.push(err instanceof Error ? err.message : String(err));
-        continue;
-      }
-      if (!Number.isFinite(amount) || amount === 0) continue;
-      const delta = sign * Math.abs(amount);
-      const { before, after, note } = applyStat(sheet, stat, delta);
-      result.sheetsChanged = true;
-      result.rolls.push({
-        type: 'stat',
-        actor: key,
-        actorName: sheet.name,
-        pending: false,
-        label: stat,
-        stat,
-        before,
-        after,
-        delta: after - before,
-        detail,
-        note,
-      });
+      const ev = statChange(sheet, stat, plain[0] ?? '', rng, result);
+      if (ev) result.rolls.push({ ...ev, actor: key, actorName: sheet.name });
     }
   }
   return result;
+}
+
+/** 解析「-2」「+1d6」这样的数值变化并作用到角色卡；不写符号时默认是扣除 */
+function statChange(
+  sheet: InvestigatorSheet,
+  stat: StatName,
+  rawSpec: string,
+  rng: Rng,
+  result: ProcessResult,
+): Omit<RollRecord, 'actor' | 'actorName'> | undefined {
+  const spec = rawSpec.replace(/\s+/g, '').replace('＋', '+').replace('－', '-');
+  const sign = spec.startsWith('+') ? 1 : -1;
+  const magnitude = spec.replace(/^[+-]/, '');
+  let amount: number;
+  let detail: string | undefined;
+  try {
+    if (/d/i.test(magnitude)) {
+      const r = rollExpression(magnitude, rng);
+      amount = r.total;
+      detail = r.detail;
+    } else {
+      amount = Number(magnitude);
+    }
+  } catch (err) {
+    result.problems.push(err instanceof Error ? err.message : String(err));
+    return undefined;
+  }
+  if (!Number.isFinite(amount) || amount === 0) return undefined;
+  const { before, after, note } = applyStat(sheet, stat, sign * Math.abs(amount));
+  result.sheetsChanged = true;
+  return { type: 'stat', pending: false, label: stat, stat, before, after, delta: after - before, detail, note };
+}
+
+/** 这次（上一次成长检定之后）成功使用过、可以做成长检定的技能 */
+export function growthCandidates(room: Room): string[] {
+  const sheet = room.trpg?.sheets.player;
+  if (!sheet) return [];
+  let start = 0;
+  room.messages.forEach((m, i) => {
+    if (m.roll?.type === 'growth') start = i + 1;
+  });
+  const skills = new Set<string>();
+  for (const m of room.messages.slice(start)) {
+    const r = m.roll;
+    if (r?.type === 'check' && r.actor === 'player' && r.success && r.label in sheet.skills && !NO_GROWTH.includes(r.label)) {
+      skills.add(r.label);
+    }
+  }
+  return [...skills];
+}
+
+/** 生成一张待掷的技能成长卡片；没有可以成长的技能、或者已经有一张没掷的卡片时返回 undefined */
+export function growthRecord(room: Room): RollRecord | undefined {
+  const sheet = room.trpg?.sheets.player;
+  if (!sheet) return undefined;
+  if (room.messages.some((m) => m.roll?.type === 'growth' && m.roll.pending)) return undefined;
+  const skills = growthCandidates(room);
+  if (skills.length === 0) return undefined;
+  return {
+    type: 'growth',
+    actor: 'player',
+    actorName: sheet.name,
+    pending: true,
+    label: '技能成长',
+    growth: skills.map((skill) => ({ skill, before: sheet.skills[skill] })),
+  };
 }
 
 /** 记下或更新一条笔记；内容没变化时返回 undefined */

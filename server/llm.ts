@@ -29,6 +29,8 @@ export interface ChatChunk {
   content?: string;
   reasoning?: string;
   usage?: TokenUsage;
+  /** 结束原因：stop / length（达到输出上限）/ content_filter；流没有正常结束时为 incomplete */
+  finish?: string;
 }
 
 /** 不接受 stream_options 的服务（报错过一次就记住，之后不再发送） */
@@ -216,6 +218,8 @@ export async function* streamChat(opts: ChatOptions): AsyncGenerator<ChatChunk> 
     }
     const usage = parseUsage(json?.usage);
     if (usage) yield { usage };
+    const finish = json?.choices?.[0]?.finish_reason;
+    if (typeof finish === 'string' && finish) yield { finish };
     return;
   }
 
@@ -242,6 +246,8 @@ export async function* streamChat(opts: ChatOptions): AsyncGenerator<ChatChunk> 
     const out: ChatChunk = {};
     const usage = parseUsage(json?.usage);
     if (usage) out.usage = usage;
+    const finish = json?.choices?.[0]?.finish_reason;
+    if (typeof finish === 'string' && finish) out.finish = finish;
     const reasoning = delta.reasoning_content ?? delta.reasoning;
     if (typeof reasoning === 'string' && reasoning) out.reasoning = reasoning;
     if (typeof delta.content === 'string' && delta.content) {
@@ -249,11 +255,12 @@ export async function* streamChat(opts: ChatOptions): AsyncGenerator<ChatChunk> 
       if (split.content) out.content = split.content;
       if (split.reasoning) out.reasoning = (out.reasoning ?? '') + split.reasoning;
     }
-    return out.content || out.reasoning || out.usage ? out : null;
+    return out.content || out.reasoning || out.usage || out.finish ? out : null;
   };
 
+  let done = false;
+  let finished = false;
   try {
-    let done = false;
     while (!done) {
       const { value, done: streamDone } = await reader.read();
       if (streamDone) break;
@@ -266,12 +273,17 @@ export async function* streamChat(opts: ChatOptions): AsyncGenerator<ChatChunk> 
           done = true;
           break;
         }
+        if (r?.finish) finished = true;
         if (r) yield r;
       }
     }
     if (!done && pending) {
       const r = handleLine(pending);
-      if (r && r !== 'done') yield r;
+      if (r === 'done') done = true;
+      else if (r) {
+        if (r.finish) finished = true;
+        yield r;
+      }
     }
   } catch (err) {
     if (err instanceof Error && (err.name === 'AbortError' || err.message.startsWith('模型服务'))) {
@@ -283,6 +295,8 @@ export async function* streamChat(opts: ChatOptions): AsyncGenerator<ChatChunk> 
   }
   const rest = splitter.flush();
   if (rest.content || rest.reasoning) yield rest;
+  // 既没有 [DONE] 也没有结束原因：连接在回复结束前断开了
+  if (!done && !finished) yield { finish: 'incomplete' };
 }
 
 /** 非流式：把流拼起来返回正文 */

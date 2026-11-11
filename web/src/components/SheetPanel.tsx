@@ -1,4 +1,4 @@
-import { Brain, Clover, Heart, Minus, Plus, Sparkles, UserRound, X } from 'lucide-react';
+import { Brain, Clover, Heart, Minus, Plus, Sparkles, TrendingUp, UserRound, X } from 'lucide-react';
 import { useState, type ReactNode } from 'react';
 import {
   CHAR_DESC,
@@ -9,7 +9,7 @@ import {
   type InvestigatorSheet,
 } from '../../../shared/coc';
 import type { Room } from '../../../shared/types';
-import { put } from '../api';
+import { post, put } from '../api';
 import { attempt } from '../toast';
 import { Segmented } from './ui';
 
@@ -37,7 +37,21 @@ export function SheetPanel({ room, onCreate }: { room: Room; onCreate: () => voi
         </div>
       )}
       {sheet ? (
-        <SheetView sheet={sheet} editable onChange={save} />
+        <>
+          <SheetView sheet={sheet} editable onChange={save} />
+          {key === 'player' && (
+            <div className="growth-entry">
+              <button
+                className="btn btn-sm"
+                onClick={() => attempt(() => post(`/rooms/${room.id}/trpg/growth`))}
+                title="对这次（上一次成长检定之后）成功使用过的技能做成长检定"
+              >
+                <TrendingUp /> 技能成长检定
+              </button>
+              <span className="hint">模组结束后，对这次成功使用过的技能做成长检定。守秘人结团时也会提醒你。</span>
+            </div>
+          )}
+        </>
       ) : (
         <div className="empty" style={{ marginTop: 40 }}>
           <div className="empty-icon">

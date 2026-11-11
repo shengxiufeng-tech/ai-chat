@@ -1,6 +1,6 @@
 // 对话调度：决定谁发言、调用模型、处理插话 / 暂停 / 打断
 
-import type { InvestigatorSheet } from '../shared/coc.ts';
+import { resolveGrowth, type InvestigatorSheet } from '../shared/coc.ts';
 import { otherSpeakerNames, stripImpersonation } from '../shared/text.ts';
 import type { Message, Participant, Room, RoomEvent, RunnerState, RunStatus } from '../shared/types.ts';
 import { DEFAULT_CONTEXT_WINDOW, fitToContext } from './context.ts';
@@ -8,6 +8,7 @@ import { completeChat, contextWindowOf, streamChat } from './llm.ts';
 import {
   buildKpMessages,
   buildTeammateMessages,
+  growthRecord,
   kpOf,
   noteMessage,
   processKpCommands,
@@ -168,6 +169,7 @@ export class RoomRunner {
       createdAt: Date.now(),
     };
     if (room.mode === 'trpg' && ooc) message.ooc = true;
+    if (room.mode === 'trpg' && !ooc) this.acceptPendingDecisions();
     room.messages.push(message);
     this.store.touchRoom(room.id, { immediate: true });
     this.emit({ type: 'message_added', message });
@@ -264,6 +266,22 @@ export class RoomRunner {
     this.requestTurn(kp.id);
   }
 
+  /** 发起技能成长检定（生成一张待掷的卡片） */
+  createGrowth() {
+    const roll = growthRecord(this.room);
+    if (!roll) {
+      if (this.room.messages.some((m) => m.roll?.type === 'growth' && m.roll.pending)) {
+        throw new Error('已经有一张待掷的技能成长卡片了');
+      }
+      throw new Error('从上次成长检定到现在，还没有成功使用过可以成长的技能');
+    }
+    const msg = rollMessage(newId(), roll);
+    this.room.messages.push(msg);
+    this.store.touchRoom(this.roomId, { immediate: true });
+    this.emit({ type: 'message_added', message: msg });
+    return msg;
+  }
+
   setSheet(key: string, sheet: InvestigatorSheet) {
     const trpg = this.trpg;
     if (key !== 'player' && !teammatesOf(this.room).some((p) => p.id === key)) {
@@ -284,29 +302,69 @@ export class RoomRunner {
     return m as Message & { roll: NonNullable<Message['roll']> };
   }
 
+  private updateRollMessage(m: Message) {
+    if (m.roll) m.content = rollText(m.roll);
+    this.store.touchRoom(this.roomId, { immediate: true });
+    this.emit({ type: 'message_updated', message: m });
+  }
+
   /** 玩家点击掷骰 */
   resolveRoll(messageId: string) {
     const trpg = this.trpg;
     const m = this.findRoll(messageId);
     const r = m.roll;
     if (!r.pending) throw new Error('这次已经掷过了');
+    if (r.type === 'growth') {
+      const sheet = trpg.sheets[r.actor];
+      if (!sheet) throw new Error('找不到这个调查员');
+      resolveGrowth(r, sheet);
+      this.updateRollMessage(m);
+      this.emitRoomMeta();
+      return m; // 成长检定不需要守秘人接着说
+    }
     if (r.type === 'check') {
       resolveCheck(r);
+      // 失败了而且可以孤注一掷：先让玩家决定，守秘人这时还不描述后果
+      if (!r.success && r.pushable && r.actor === 'player') {
+        if (trpg.autoRoll) r.pushable = false;
+        else r.decision = 'pending';
+      }
     } else if (r.type === 'san') {
       const sheet = trpg.sheets[r.actor];
       if (!sheet) throw new Error('找不到这个调查员');
       resolveSan(r, sheet);
       this.emitRoomMeta();
     }
-    m.content = rollText(r);
-    this.store.touchRoom(this.roomId, { immediate: true });
-    this.emit({ type: 'message_updated', message: m });
+    this.updateRollMessage(m);
     this.afterHumanRoll();
     return m;
   }
 
-  /** 孤注一掷：对失败的检定再骰一次 */
-  pushRoll(messageId: string) {
+  /** 接受失败，不孤注一掷 */
+  acceptRoll(messageId: string) {
+    const m = this.findRoll(messageId);
+    const r = m.roll;
+    if (r.decision !== 'pending') throw new Error('这次检定不需要再做选择');
+    r.decision = 'accepted';
+    r.pushable = false;
+    this.updateRollMessage(m);
+    this.afterHumanRoll();
+    return m;
+  }
+
+  /** 玩家没做选择就直接输入了新的行动：视为接受失败 */
+  private acceptPendingDecisions() {
+    for (const m of this.room.messages) {
+      if (m.roll?.decision === 'pending') {
+        m.roll.decision = 'accepted';
+        m.roll.pushable = false;
+        this.updateRollMessage(m);
+      }
+    }
+  }
+
+  /** 孤注一掷：对失败的检定再骰一次。how 是玩家说明怎么更努力地尝试（可选），会先发给守秘人 */
+  pushRoll(messageId: string, how?: string) {
     const m = this.findRoll(messageId);
     const r = m.roll;
     if (r.type !== 'check' || r.pending || r.success || !r.pushable || r.pushedAlready) {
@@ -314,7 +372,21 @@ export class RoomRunner {
     }
     r.pushedAlready = true;
     r.pushable = false;
-    this.emit({ type: 'message_updated', message: m });
+    r.decision = 'pushed';
+    this.updateRollMessage(m);
+    const text = how?.trim();
+    if (text) {
+      const said: Message = {
+        id: newId(),
+        role: 'human',
+        speakerName: this.room.settings.humanName,
+        content: `（孤注一掷）${text}`,
+        status: 'done',
+        createdAt: Date.now(),
+      };
+      this.room.messages.push(said);
+      this.emit({ type: 'message_added', message: said });
+    }
     const push: typeof r = {
       type: 'check',
       actor: r.actor,
@@ -337,7 +409,10 @@ export class RoomRunner {
 
   private afterHumanRoll() {
     const room = this.room;
-    const stillPending = room.messages.some((m) => m.roll?.pending && m.roll.actor === 'player');
+    // 还有没掷的骰子、或者还在考虑要不要孤注一掷时，守秘人先不接着说（成长检定不算）
+    const stillPending = room.messages.some(
+      (m) => m.roll && m.roll.actor === 'player' && m.roll.type !== 'growth' && (m.roll.pending || m.roll.decision === 'pending'),
+    );
     const kp = kpOf(room);
     if (!stillPending && kp) {
       this.kpChain = 0;
@@ -366,7 +441,14 @@ export class RoomRunner {
     if (res.sheetsChanged || res.notes.length || res.memosChanged) this.emitRoomMeta();
     this.store.touchRoom(room.id, { immediate: true });
 
-    if (res.pendingHuman > 0) return; // 等玩家掷骰
+    if (res.pendingHuman > 0) {
+      // 等玩家掷骰：已经排队的队友先别说话，等守秘人描述完结果再行动
+      const teammateIds = new Set(teammatesOf(room).map((p) => p.id));
+      const before = this.queue.length;
+      this.queue = this.queue.filter((r) => r === 'auto' || !teammateIds.has(r.participantId));
+      if (this.queue.length !== before) this.teammatesActed = false;
+      return;
+    }
     const kp = kpOf(room);
     if (res.needContinue && kp) {
       if (this.kpChain < 3) {
@@ -598,6 +680,9 @@ export class RoomRunner {
         signal: controller.signal,
       });
       for await (const chunk of stream) {
+        if (chunk.finish === 'length' || chunk.finish === 'content_filter' || chunk.finish === 'incomplete') {
+          message.truncated = chunk.finish;
+        }
         if (chunk.content) message.content += chunk.content;
         if (chunk.reasoning) message.reasoning += chunk.reasoning;
         this.emit({

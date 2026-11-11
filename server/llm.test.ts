@@ -225,3 +225,23 @@ test('服务不认 stream_options 时自动去掉重发，之后也不再发送'
     },
   );
 });
+
+test('识别回复不完整：达到输出上限、连接提前断开', async () => {
+  const run = async (body: string) => {
+    let finish: string | undefined;
+    await withServer(
+      (_req, res) => {
+        res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+        res.end(body);
+      },
+      async (baseUrl) => {
+        for await (const c of streamChat({ baseUrl, apiKey: '', model: 'm', messages: [] })) if (c.finish) finish = c.finish;
+      },
+    );
+    return finish;
+  };
+  const ev = (o: unknown) => `data: ${JSON.stringify(o)}\n\n`;
+  assert.equal(await run(ev({ choices: [{ delta: { content: '凤笙，钥' }, finish_reason: 'length' }] }) + 'data: [DONE]\n\n'), 'length');
+  assert.equal(await run(ev({ choices: [{ delta: { content: '凤笙，钥' } }] })), 'incomplete');
+  assert.equal(await run(ev({ choices: [{ delta: { content: '好' }, finish_reason: 'stop' }] }) + 'data: [DONE]\n\n'), 'stop');
+});

@@ -602,7 +602,12 @@ app.delete(
 
 app.post('/api/rooms/:id/trpg/start', runnerAction((_req, id) => runners.get(id).startTrpg()));
 app.post('/api/rooms/:id/rolls/:mid/roll', runnerAction((req, id) => runners.get(id).resolveRoll(param(req, 'mid'))));
-app.post('/api/rooms/:id/rolls/:mid/push', runnerAction((req, id) => runners.get(id).pushRoll(param(req, 'mid'))));
+app.post(
+  '/api/rooms/:id/rolls/:mid/push',
+  runnerAction((req, id) => runners.get(id).pushRoll(param(req, 'mid'), typeof req.body?.how === 'string' ? req.body.how : undefined)),
+);
+app.post('/api/rooms/:id/rolls/:mid/accept', runnerAction((req, id) => runners.get(id).acceptRoll(param(req, 'mid'))));
+app.post('/api/rooms/:id/trpg/growth', runnerAction((_req, id) => runners.get(id).createGrowth()));
 
 app.post(
   '/api/rooms/:id/assistant',
