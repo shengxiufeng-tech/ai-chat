@@ -244,6 +244,14 @@ export const MessageItem = memo(function MessageItem({
                   </span>
                 </div>
               ))}
+              {m.status === 'interrupted' && isLast && m.role === 'ai' && (
+                <div className="msg-retry">
+                  <span className="hint">这条回复被停止了。</span>
+                  <button className="btn btn-sm" onClick={() => onRegenerate(m.id)}>
+                    <RotateCcw /> 重新生成
+                  </button>
+                </div>
+              )}
               {m.status === 'error' && (
                 <div className="msg-error-text">
                   <AlertCircle />

@@ -6,6 +6,10 @@ export interface ScenarioInfo {
   id: string;
   title: string;
   era: Era;
+  /** 时代背景（自由描述） */
+  eraLabel: string;
+  /** 开团须知（玩家可以看） */
+  playerInfo?: string;
   /** 玩家能看到的简介 */
   intro: string;
   /** 只有守秘人能看到 */
@@ -16,6 +20,8 @@ export const BAISHUI: ScenarioInfo = {
   id: 'baishui',
   title: '雾锁白水镇',
   era: '1920s',
+  eraLabel: '1927 年（民国十六年）夏末，江南水乡',
+  playerInfo: '推荐 1~3 人（AI 队友也算）\n游玩时长约 1~2 小时\n新手友好，推荐职业：记者、私家侦探、医生',
   intro:
     '民国十六年（1927 年）夏末。你的老朋友、民俗学者沈怀瑾一个月前去江南水乡白水镇考察，寄回最后一封信后便音讯全无。信里写着："镇上有一口会唱歌的井。"你决定亲自去找他。',
   secret: `【剧本：雾锁白水镇】原创新手短篇，预计 1~2 小时。时代：1927 年，江南水乡。
@@ -58,16 +64,18 @@ export const BAISHUI: ScenarioInfo = {
 - 这是新手团，失败的检定也要让故事推进（比如被阿福发现，但因此偶遇阿青）。`,
 };
 
-export function improvScenario(theme: string, era: Era): ScenarioInfo {
+export function improvScenario(theme: string, era: Era, eraLabel?: string): ScenarioInfo {
   const t = theme.trim() || '一座偏僻小镇里的失踪事件';
+  const label = eraLabel?.trim() || (era === 'modern' ? '现代' : '1920 年代');
   return {
     id: 'improv',
     title: `即兴剧本：${t.length > 16 ? `${t.slice(0, 16)}…` : t}`,
     era,
+    eraLabel: label,
     intro: `守秘人会根据主题「${t}」即兴创作一个短篇调查故事。`,
     secret: `【没有预设剧本，请你即兴创作】
 主题：${t}
-时代：${era === 'modern' ? '现代' : '1920 年代'}
+时代背景：${label}
 
 请先在心里构思好（不要写出来给玩家看）：
 1. 事件的真相：发生了什么、背后的神话存在或邪教是什么。
@@ -87,6 +95,7 @@ export function customScenario(text: string, era: Era): ScenarioInfo {
     id: 'custom',
     title: firstLine.slice(0, 24),
     era,
+    eraLabel: era === 'modern' ? '现代' : '1920 年代',
     intro: '使用你提供的剧本。',
     secret: `【剧本（由玩家提供，按照这个剧本主持）】\n${text.trim()}`,
   };

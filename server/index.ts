@@ -18,6 +18,7 @@ import { completeChat, completeChatWithUsage, listModels, primeModelCache, type 
 import { BUILTIN_TEMPLATES, ROOM_PRESETS } from './presets.ts';
 import { RunnerManager, sessionIdFor } from './runner.ts';
 import { BAISHUI, customScenario, improvScenario } from './scenarios.ts';
+import { classifyEra, cleanText, extractScriptText, prepareScript } from './scripts.ts';
 import { newId, normalizeRoom, Store } from './store.ts';
 import { buildAssistantMessages, kpOf, parseSuggestions } from './trpg.ts';
 
@@ -34,7 +35,7 @@ const DATA_DIR = path.resolve(process.env.DATA_DIR || './data');
 const store = new Store(DATA_DIR);
 const runners = new RunnerManager(store);
 const app = express();
-app.use(express.json({ limit: '2mb' }));
+app.use(express.json({ limit: '25mb' }));
 
 class HttpError extends Error {
   constructor(
@@ -187,6 +188,31 @@ app.post(
   }),
 );
 
+/** 导入剧本：上传文件（base64）或粘贴文字，提取并整理成「玩家可看」和「守秘人专用」两部分 */
+app.post(
+  '/api/scripts/prepare',
+  h(async (req) => {
+    const b = req.body ?? {};
+    let text = typeof b.text === 'string' ? cleanText(b.text) : '';
+    const name = typeof b.name === 'string' ? b.name : '';
+    if (typeof b.data === 'string' && b.data) {
+      try {
+        text = await extractScriptText(name, Buffer.from(b.data, 'base64'));
+      } catch (err) {
+        throw new HttpError(400, err instanceof Error ? err.message : String(err));
+      }
+    }
+    if (!text.trim()) throw new HttpError(400, '没有读到剧本内容（文件是空的，或者内容都是图片）');
+    const s = store.getSettings();
+    return prepareScript(text, {
+      baseUrl: s.baseUrl,
+      apiKey: s.apiKey,
+      model: String(b.model || s.defaultModel || ''),
+      fileName: name || undefined,
+    });
+  }),
+);
+
 // ---------------- 模板与预设 ----------------
 
 app.get(
@@ -237,13 +263,24 @@ const TEAMMATE_PERSONAS = [
 ];
 
 function createTrpgRoom(o: TrpgCreateOptions): Room {
-  const era = o.era === 'modern' ? 'modern' : '1920s';
+  const era = o.eraLabel ? classifyEra(o.eraLabel) : o.era === 'modern' ? 'modern' : '1920s';
+  const p = o.prepared;
   const scenario =
     o.scenarioId === 'improv'
-      ? improvScenario(o.theme ?? '', era)
-      : o.scenarioId === 'custom'
-        ? customScenario(o.customScript ?? '', era)
-        : BAISHUI;
+      ? improvScenario(o.theme ?? '', era, o.eraLabel)
+      : o.scenarioId === 'custom' && p
+        ? {
+            id: 'custom',
+            title: String(p.title || '自定义剧本').slice(0, 40),
+            era: p.eraLabel ? classifyEra(p.eraLabel) : p.era === 'modern' ? 'modern' : '1920s',
+            eraLabel: String(p.eraLabel ?? ''),
+            playerInfo: String(p.playerInfo ?? ''),
+            intro: String(p.intro || '使用你导入的剧本。'),
+            secret: String(p.secret ?? ''),
+          }
+        : o.scenarioId === 'custom'
+          ? customScenario(o.customScript ?? '', era)
+          : BAISHUI;
   const now = Date.now();
   const room: Room = {
     id: newId(),
@@ -286,6 +323,8 @@ function createTrpgRoom(o: TrpgCreateOptions): Room {
     scenarioIntro: scenario.intro,
     scenarioSecret: scenario.secret,
     era: scenario.era,
+    eraLabel: scenario.eraLabel || undefined,
+    playerInfo: scenario.playerInfo || undefined,
     teachingMode: o.teachingMode ?? true,
     autoRoll: o.autoRoll ?? false,
     teammatesAct: true,

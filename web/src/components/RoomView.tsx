@@ -22,7 +22,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { otherSpeakerNames } from '../../../shared/text';
 import { del, patch, post } from '../api';
 import { askConfirm } from '../confirm';
-import { attempt } from '../toast';
+import { attempt, toast } from '../toast';
 import { useRoom } from '../useRoom';
 import { AssistantPanel } from './AssistantPanel';
 import { CastBar } from './CastBar';
@@ -132,7 +132,9 @@ export function RoomView({
   const kpId = room.participants.find((p) => p.role === 'kp')?.id;
   const t = room.trpg;
   const needSetup = trpg && t && !t.started && room.messages.length === 0;
-  const pendingRoll = room.messages.some((m) => m.roll?.pending && m.roll.actor === 'player');
+  const pendingRoll = room.messages.some(
+    (m) => m.roll && m.roll.actor === 'player' && m.roll.type !== 'growth' && (m.roll.pending || m.roll.decision === 'pending'),
+  );
 
   let statusText = trpg ? (pendingRoll ? '等你掷骰' : '轮到你行动') : running ? '自动对话中' : '已暂停';
   if (runner?.picking) statusText = 'AI 主持人在选下一位…';
@@ -212,8 +214,25 @@ export function RoomView({
                 <SkipForward />
               </button>
             )}
+            {trpg && t?.started && kpId && !generating && !pendingRoll && (
+              <button
+                className="btn"
+                onClick={() => attempt(() => post(`${base}/turn`, { participantId: kpId }))}
+                title="让守秘人接着说（卡住、被停止或出错之后都可以用）"
+              >
+                <Play /> 继续
+              </button>
+            )}
             {generating && (
-              <button className="btn btn-warn" onClick={() => attempt(() => post(`${base}/stop`))} title="立刻打断并暂停">
+              <button
+                className="btn btn-warn"
+                onClick={async () => {
+                  if ((await attempt(() => post(`${base}/stop`))) && trpg) {
+                    toast('已停止。需要时点右上角的「继续」，让守秘人重新说。');
+                  }
+                }}
+                title="立刻打断并暂停"
+              >
                 <Square /> 停止
               </button>
             )}

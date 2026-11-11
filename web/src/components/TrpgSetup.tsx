@@ -12,12 +12,16 @@ export function TrpgSetup({ room, onCreate }: { room: Room; onCreate: () => void
   const [starting, setStarting] = useState(false);
   const teammates = room.participants.filter((p) => p.role === 'player');
 
-  const quick = () =>
-    attempt(() =>
-      put(`/rooms/${room.id}/trpg/sheets/player`, {
-        sheet: quickInvestigator({ occupationId: 'journalist', era: trpg.era, name: room.settings.humanName === '我' ? undefined : room.settings.humanName }),
-      }),
-    );
+  const quick = () => {
+    // 随机名字别和 AI 队友撞名
+    const taken = new Set(teammates.map((p) => trpg.sheets[p.id]?.name ?? p.name));
+    const name = room.settings.humanName === '我' ? undefined : room.settings.humanName;
+    let sheet = quickInvestigator({ occupationId: 'journalist', era: trpg.era, name });
+    for (let i = 0; i < 20 && !name && taken.has(sheet.name); i++) {
+      sheet = quickInvestigator({ occupationId: 'journalist', era: trpg.era });
+    }
+    return attempt(() => put(`/rooms/${room.id}/trpg/sheets/player`, { sheet }));
+  };
 
   const start = async () => {
     setStarting(true);
@@ -31,6 +35,24 @@ export function TrpgSetup({ room, onCreate }: { room: Room; onCreate: () => void
         <BookOpen style={{ width: 20, height: 20, color: '#a78bfa' }} /> {trpg.scenarioTitle}
       </h2>
       <div className="scenario-intro">{trpg.scenarioIntro}</div>
+      {(trpg.eraLabel || trpg.playerInfo) && (
+        <div className="player-info">
+          {trpg.eraLabel && (
+            <div>
+              <b>时代背景：</b>
+              {trpg.eraLabel}
+            </div>
+          )}
+          {trpg.playerInfo && (
+            <>
+              <b>开团须知：</b>
+              {trpg.playerInfo.split('\n').map((l, i) => (
+                <div key={i}>{l.replace(/^[-•·\s]+/, '')}</div>
+              ))}
+            </>
+          )}
+        </div>
+      )}
       <p className="hint" style={{ fontSize: 13 }}>
         <b style={{ color: 'var(--text)' }}>跑团怎么玩？</b> 守秘人（AI）描述场景、扮演故事里的所有人物；你决定你的调查员做什么、说什么。
         结果不确定的时候掷骰子决定成败。不懂的随时问右侧的「规则助手」。

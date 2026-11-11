@@ -47,7 +47,12 @@ export interface TrpgState {
   scenarioIntro: string;
   /** 只有守秘人能看到的剧本内容 */
   scenarioSecret: string;
+  /** 用哪套技能：1920 年代 / 现代 */
   era: Era;
+  /** 时代背景（自由描述，比如「1927 年，江南水乡」） */
+  eraLabel?: string;
+  /** 开团须知（推荐人数、时长、推荐技能、车卡限制等），玩家可以看 */
+  playerInfo?: string;
   /** 新手教学模式：守秘人会附上规则小贴士 */
   teachingMode: boolean;
   /** 自动替玩家掷骰 */

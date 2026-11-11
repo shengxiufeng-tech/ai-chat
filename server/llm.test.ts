@@ -245,3 +245,39 @@ test('识别回复不完整：达到输出上限、连接提前断开', async ()
   assert.equal(await run(ev({ choices: [{ delta: { content: '凤笙，钥' } }] })), 'incomplete');
   assert.equal(await run(ev({ choices: [{ delta: { content: '好' }, finish_reason: 'stop' }] }) + 'data: [DONE]\n\n'), 'stop');
 });
+
+test('模型长时间没有回应时自动停止并报错，而不是一直卡着', async () => {
+  const run = async (handler: http.RequestListener, opts: { firstTokenTimeoutMs: number; idleTimeoutMs: number }) => {
+    let error = '';
+    let text = '';
+    await withServer(handler, async (baseUrl) => {
+      try {
+        for await (const c of streamChat({ baseUrl, apiKey: '', model: 'm', messages: [], ...opts })) text += c.content ?? '';
+      } catch (err) {
+        error = err instanceof Error ? err.message : String(err);
+      }
+    });
+    return { error, text };
+  };
+  // 连上了但一直不说话（只发心跳）
+  const silent = await run(
+    (_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+      const t = setInterval(() => res.write(': ping\n\n'), 50);
+      res.on('close', () => clearInterval(t));
+    },
+    { firstTokenTimeoutMs: 300, idleTimeoutMs: 300 },
+  );
+  assert.match(silent.error, /没有任何回应.*重试/);
+
+  // 说了一半就停住
+  const stalled = await run(
+    (_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+      res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: '凤笙，钥' } }] })}\n\n`);
+    },
+    { firstTokenTimeoutMs: 1000, idleTimeoutMs: 300 },
+  );
+  assert.equal(stalled.text, '凤笙，钥');
+  assert.match(stalled.error, /回复中断了/);
+});

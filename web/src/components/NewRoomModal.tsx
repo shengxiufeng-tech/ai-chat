@@ -4,8 +4,10 @@ import type { AppSettings, Room, RoomMode, RoomPreset, TrpgCreateOptions } from 
 import { get, post } from '../api';
 import { attempt } from '../toast';
 import { EffortPicker } from './EffortPicker';
+import { EraInput } from './EraInput';
 import { Modal } from './Modal';
 import { ModelInput } from './ModelInput';
+import { ScriptImport } from './ScriptImport';
 import { Field, Segmented, ToggleRow } from './ui';
 
 const PRESET_ICONS: Record<string, string> = {
@@ -25,7 +27,7 @@ const SCENARIOS = [
     desc: '1927 年江南水乡。老友在小镇失踪，信里只说"镇上有一口会唱歌的井"。约 1~2 小时。',
   },
   { id: 'improv', icon: '🎲', name: 'AI 即兴剧本', desc: '给一个主题，守秘人现场编一个短篇调查故事。' },
-  { id: 'custom', icon: '📜', name: '我自己的剧本', desc: '粘贴你找到的剧本或大纲，守秘人照着主持。' },
+  { id: 'custom', icon: '📜', name: '我自己的剧本', desc: '导入剧本文件（txt / doc / docx）或粘贴文字，AI 会帮你挡住剧透。' },
 ];
 
 export function NewRoomModal({
@@ -48,7 +50,7 @@ export function NewRoomModal({
     scenarioId: 'baishui',
     theme: '',
     customScript: '',
-    era: '1920s',
+    eraLabel: '1920 年代，美国新英格兰',
     kpModel: '',
     kpEffort: '',
     teammateCount: 1,
@@ -94,7 +96,7 @@ export function NewRoomModal({
   };
 
   const preset = presets.find((p) => p.id === presetId);
-  const invalid = mode === 'trpg' && t.scenarioId === 'custom' && !t.customScript?.trim();
+  const invalid = mode === 'trpg' && t.scenarioId === 'custom' && !t.prepared && !t.customScript?.trim();
 
   return (
     <Modal
@@ -173,24 +175,25 @@ export function NewRoomModal({
               </div>
             </Field>
             {t.scenarioId === 'improv' && (
-              <div className="form-grid">
+              <>
                 <Field label="主题">
                   <input value={t.theme} onChange={(e) => setTrpg('theme', e.target.value)} placeholder="例如：深夜的大学图书馆、海边灯塔、失踪的考古队" />
                 </Field>
-                <Field label="时代">
-                  <Segmented block value={t.era ?? '1920s'} onChange={(v) => setTrpg('era', v)} options={[{ value: '1920s', label: '1920 年代' }, { value: 'modern', label: '现代' }]} />
-                </Field>
-              </div>
-            )}
-            {t.scenarioId === 'custom' && (
-              <>
-                <Field label="剧本内容" hint="（只有守秘人能看到；第一行会作为房间名）">
-                  <textarea rows={6} value={t.customScript} onChange={(e) => setTrpg('customScript', e.target.value)} placeholder="把剧本、大纲或者你的构想粘贴到这里…" />
-                </Field>
-                <Field label="时代">
-                  <Segmented value={t.era ?? '1920s'} onChange={(v) => setTrpg('era', v)} options={[{ value: '1920s', label: '1920 年代' }, { value: 'modern', label: '现代' }]} />
+                <Field label="时代背景">
+                  <EraInput value={t.eraLabel ?? ''} onChange={(v) => setTrpg('eraLabel', v)} />
                 </Field>
               </>
+            )}
+            {t.scenarioId === 'custom' && (
+              <ScriptImport
+                model={t.kpModel}
+                prepared={t.prepared ?? null}
+                onPrepared={(p) => setTrpg('prepared', p ?? undefined)}
+                pasted={t.customScript ?? ''}
+                onPasted={(v) => setTrpg('customScript', v)}
+                eraLabel={t.eraLabel ?? ''}
+                onEraLabel={(v) => setTrpg('eraLabel', v)}
+              />
             )}
 
             <div className="form-grid">

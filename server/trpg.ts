@@ -145,6 +145,7 @@ export function buildKpSystemPrompt(room: Room, kp: Participant) {
   const parts = [
     '你是这场《克苏鲁的呼唤》第七版（COC 7th）跑团的守秘人（KP）：负责主持游戏、描述环境、扮演所有 NPC，并按规则裁定结果。',
     kp.persona.trim() ? `\n【你的主持风格】\n${kp.persona.trim()}` : '',
+    trpg.eraLabel ? `\n【时代背景】${trpg.eraLabel}。描写科技、社会风貌、人物的衣着和说话方式时要符合这个时代。` : '',
     `\n【玩家】\n${rosterNames(room)}`,
     `每一轮最后一条消息的末尾会附上【当前状态】：调查员最新的数值、技能和物品${trpg.notebook ? '，守秘人笔记' : ''}${trpg.memo ? '，以及你的秘密备忘' : ''}。以那里的内容为准。`,
     `\n${trpg.scenarioSecret}`,
@@ -226,6 +227,7 @@ export function buildTeammateMessages(room: Room, self: Participant, history: Me
   const name = sheet?.name ?? self.name;
   const system = [
     `你在一场《克苏鲁的呼唤》（COC 7）跑团中扮演 AI 调查员「${name}」${sheet ? `（${sheet.occupation}）` : ''}，和人类玩家「${room.settings.humanName}」（扮演调查员「${playerName(room)}」）一起调查。守秘人负责描述世界和裁定结果。`,
+    trpg.eraLabel ? `\n【时代背景】${trpg.eraLabel}。说话和行动要符合这个时代。` : '',
     self.persona.trim() ? `\n【你的性格】\n${self.persona.trim()}` : '',
     `\n每一轮最后一条消息的末尾会附上你的调查员的最新状态${trpg.notebook ? '和大家共享的调查笔记' : ''}。`,
     `\n【原则】
@@ -277,6 +279,8 @@ export function buildAssistantMessages(room: Room, question: string, mode: 'ask'
     `\n${RULES_CHEATSHEET}`,
     trpg.sheets.player ? `\n【玩家的调查员】\n${sheetSummary(trpg.sheets.player, trpg.era)}` : '\n（玩家还没有创建调查员）',
     `\n【剧本简介】${trpg.scenarioIntro}`,
+    trpg.eraLabel ? `【时代背景】${trpg.eraLabel}` : '',
+    trpg.playerInfo ? `【开团须知】\n${trpg.playerInfo}` : '',
     trpg.notebook && trpg.notes.length ? `\n【调查笔记】\n${notesText(trpg.notes)}` : '',
     `\n【最近的游戏记录】\n${transcript || '（游戏还没开始）'}`,
   ]

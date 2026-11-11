@@ -23,6 +23,10 @@ export interface ChatOptions {
    */
   sessionId?: string;
   signal?: AbortSignal;
+  /** 等第一段内容最多多久（毫秒），默认 3 分钟：推理模型可能要先想一会儿 */
+  firstTokenTimeoutMs?: number;
+  /** 两段内容之间最多隔多久（毫秒），默认 90 秒 */
+  idleTimeoutMs?: number;
 }
 
 export interface ChatChunk {
@@ -154,8 +158,41 @@ function partialTagLength(buf: string, tag: string) {
   return 0;
 }
 
-/** 流式对话：逐块产出正文和思考过程 */
+/**
+ * 流式对话：逐块产出正文和思考过程。
+ * 模型长时间没有任何新内容时自动停止并报错（而不是一直卡着），界面上会出现「重试」。
+ */
 export async function* streamChat(opts: ChatOptions): AsyncGenerator<ChatChunk> {
+  const first = opts.firstTokenTimeoutMs ?? 180_000;
+  const gap = opts.idleTimeoutMs ?? 90_000;
+  const idle = new AbortController();
+  const signal = opts.signal ? AbortSignal.any([opts.signal, idle.signal]) : idle.signal;
+  let timer = setTimeout(() => idle.abort(), first);
+  let seen = false;
+  try {
+    for await (const chunk of streamChatRaw({ ...opts, signal })) {
+      if (chunk.content || chunk.reasoning) {
+        seen = true;
+        clearTimeout(timer);
+        timer = setTimeout(() => idle.abort(), gap);
+      }
+      yield chunk;
+    }
+  } catch (err) {
+    if (idle.signal.aborted && !opts.signal?.aborted) {
+      throw new Error(
+        seen
+          ? `模型的回复中断了：超过 ${Math.round(gap / 1000)} 秒没有新内容，已自动停止。可以点「重试」。`
+          : `模型超过 ${Math.round(first / 1000)} 秒没有任何回应，已自动停止。可以点「重试」再试一次。`,
+      );
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function* streamChatRaw(opts: ChatOptions): AsyncGenerator<ChatChunk> {
   if (isMock(opts.baseUrl)) {
     yield* mockStream(opts);
     return;
@@ -442,6 +479,16 @@ async function* mockReply(opts: ChatOptions): AsyncGenerator<ChatChunk> {
     const names = [...last.matchAll(/^- 「([^」]+)」/gm)].map((m) => m[1]);
     await sleep(200, opts.signal);
     yield { content: names[Math.floor(Math.random() * names.length)] ?? '' };
+    return;
+  }
+
+  // 模拟剧本整理（不会给出任何剧情内容）
+  if (system.includes('剧本整理助手')) {
+    await sleep(200, opts.signal);
+    const firstLine = last.replace(/^剧本原文如下：\s*/, '').split('\n').find((l) => l.trim()) ?? '模拟剧本';
+    yield {
+      content: `【标题】\n${firstLine.trim().slice(0, 20)}\n【时代背景】\n1920 年代，模拟的地点\n【玩家简介】\n（模拟简介）你受朋友之托前来调查一件怪事。\n【开团须知】\n推荐 2~4 人\n游玩时长约 2 小时\n【守秘人速览】\n（模拟速览）这里是只有守秘人能看的提纲。`,
+    };
     return;
   }
 

@@ -181,13 +181,38 @@ export interface RoomPreset {
   settings?: Partial<RoomSettings>;
 }
 
+/** 整理好的剧本：玩家能看的（标题、时代、简介、开团须知）和只有守秘人能看的（secret）分开 */
+export interface PreparedScript {
+  title: string;
+  /** 时代背景（自由描述） */
+  eraLabel: string;
+  /** 用哪套技能：1920 年代 / 现代 */
+  era: '1920s' | 'modern';
+  /** 给玩家看的无剧透简介 */
+  intro: string;
+  /** 开团须知（推荐人数、时长、推荐技能、车卡限制等），玩家可以看 */
+  playerInfo: string;
+  /** 只有守秘人能看：AI 整理的速览 + 剧本原文 */
+  secret: string;
+  /** 原文字数 */
+  chars: number;
+  /** 原文太长被截断了 */
+  truncated?: boolean;
+  /** 整理过程中的提示（比如整理失败、改用原文） */
+  warning?: string;
+}
+
 /** 新建跑团房间的参数 */
 export interface TrpgCreateOptions {
   scenarioId: string;
   /** AI 即兴剧本的主题 */
   theme?: string;
-  /** 自己的剧本文本 */
+  /** 自己的剧本文本（直接粘贴、没有整理时用） */
   customScript?: string;
+  /** 整理好的剧本（上传文件或粘贴后点了「整理」） */
+  prepared?: PreparedScript;
+  /** 时代背景（自由描述，AI 即兴剧本用；技能列表会据此判断） */
+  eraLabel?: string;
   era?: '1920s' | 'modern';
   kpModel: string;
   kpEffort: string;

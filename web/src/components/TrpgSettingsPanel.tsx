@@ -19,6 +19,12 @@ export function TrpgSettingsPanel({ room }: { room: Room }) {
           <br />
           {trpg.scenarioIntro}
         </div>
+        {(trpg.eraLabel || trpg.playerInfo) && (
+          <div className="player-info">
+            {trpg.eraLabel && <div>时代背景：{trpg.eraLabel}</div>}
+            {trpg.playerInfo && <div style={{ whiteSpace: 'pre-wrap' }}>{trpg.playerInfo}</div>}
+          </div>
+        )}
       </Field>
       <div className="divider" />
       <ToggleRow
