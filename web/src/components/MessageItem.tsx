@@ -20,7 +20,7 @@ import {
 import { memo, useState, type CSSProperties, type ReactNode } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { stripCommands } from '../../../shared/coc';
+import { kpDisplayText } from '../../../shared/coc';
 import { stripImpersonation } from '../../../shared/text';
 import { effortLabel, type Message } from '../../../shared/types';
 import { copyText } from '../clipboard';
@@ -149,7 +149,7 @@ export const MessageItem = memo(function MessageItem({
   const isHuman = m.role === 'human';
   // 生成过程中就把替别人写的段落藏起来（生成完后服务端会正式去掉）
   const raw = streaming && hideNames?.length ? stripImpersonation(m.content, hideNames).text : m.content;
-  const display = isKp ? stripCommands(raw) : raw;
+  const display = isKp ? kpDisplayText(raw) : raw;
   const { body, tips } = isKp ? splitTips(display) : { body: display, tips: [] };
 
   const copy = async () => {

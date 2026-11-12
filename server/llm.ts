@@ -527,6 +527,15 @@ async function* mockReply(opts: ChatOptions): AsyncGenerator<ChatChunk> {
 
   // 跑团：模拟守秘人、AI 队友和规则助手
   if (system.includes('跑团的守秘人')) {
+    // 测试用：很长的回复（测试滚动）
+    if (last.includes('测试长回复')) {
+      const text = Array.from({ length: 24 }, (_, i) => `（模拟守秘人）第 ${i + 1} 段：雾气更浓了，远处传来若有若无的歌声，青石板路湿漉漉地反着光。`).join('\n\n');
+      for (const ch of Array.from(text)) {
+        await sleep(3, opts.signal);
+        yield { content: ch };
+      }
+      return;
+    }
     // 测试用：按剧本修正成功线的检定
     if (last.includes('测试修正')) {
       const text = '（模拟守秘人）手包被压在沉重的行李箱底下，能不能完整抽出来全看运气。[检定:幸运:-1d20]';

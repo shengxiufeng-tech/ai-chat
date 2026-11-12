@@ -1,6 +1,6 @@
 // 导出：文档样式（图片 / HTML 共用）和文本格式
 
-import { stripCommands } from '../../shared/coc';
+import { kpDisplayText } from '../../shared/coc';
 import { effortLabel, type Message, type Room } from '../../shared/types';
 
 export interface ExportOptions {
@@ -17,7 +17,7 @@ export const isKpMessage = (room: Room, m: Message) =>
 
 /** 显示用的消息正文（去掉守秘人指令） */
 export function displayContent(room: Room, m: Message) {
-  return isKpMessage(room, m) ? stripCommands(m.content) : m.content.trim();
+  return isKpMessage(room, m) ? kpDisplayText(m.content) : m.content.trim();
 }
 
 export function speakerOf(room: Room, m: Message) {

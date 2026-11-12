@@ -1355,6 +1355,44 @@ mark {
   font-weight: 650;
 }
 
+.messages-wrap {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+}
+
+.jump-latest {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: 10px;
+  z-index: 5;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 32px;
+  padding: 0 14px;
+  border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface-1);
+  color: var(--text-2);
+  font-size: 12.5px;
+  box-shadow: var(--shadow-md);
+  animation: fade 0.15s ease-out;
+}
+
+.jump-latest:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.jump-latest svg {
+  width: 14px;
+  height: 14px;
+}
+
 /* 构思 / 执笔 */
 .model-pair {
   display: inline-flex;
@@ -3427,7 +3465,8 @@ mark {
 
 .alloc-table {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
+  /* minmax(0, …)：技能说明很长时也不会把弹窗撑宽 */
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 6px 16px;
 }
 
@@ -3933,6 +3972,38 @@ mark {
 
   .char-roll-grid {
     grid-template-columns: repeat(2, 1fr);
+  }
+
+  /* 车卡：技能分配改成一列，点数框可以换行 */
+  .alloc-table {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .alloc-group {
+    grid-column: auto;
+  }
+
+  .points {
+    flex: 1 1 auto;
+    flex-wrap: wrap;
+  }
+
+  .alloc-row input {
+    width: 64px;
+    height: 34px;
+  }
+
+  .wizard-steps {
+    padding: 4px 16px 0;
+  }
+
+  .wizard-step {
+    font-size: 11px;
+  }
+
+  /* 内容再宽也不能把弹窗撑出屏幕 */
+  .modal-body {
+    overflow-x: hidden;
   }
 
   .composer-bar {

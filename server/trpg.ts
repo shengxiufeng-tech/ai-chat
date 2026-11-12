@@ -178,7 +178,8 @@ export function buildKpSystemPrompt(room: Room, kp: Participant) {
 - [物品:+手电筒]、[物品:-旧钥匙]：调查员获得或失去物品
 指令规则：
 - 只在结果不确定、而且成败都有意义时才要求检定。一次只要求一个检定（理智检定除外），把指令写在消息末尾，然后停下来等结果，不要提前描述检定的结果。
-- 收到【骰子】结果后，根据成功等级描述后果。失败也要让剧情推进（付出代价、引来麻烦、浪费时间），不要只说"什么都没发现"。
+- 要求检定（包括理智检定）的消息写到需要掷骰的那一刻就停下：不要在同一条消息里问玩家接下来做什么，也不要先写之后的发展。玩家掷完骰你会收到结果，到时再接着写。理智检定紧跟在恐怖的景象之后：写到调查员看清那一幕，就写 [理智:…] 停下。
+- 收到【骰子】结果后，从结果直接接着写：先写检定带来的后果或调查员的反应（理智检定失败时可以写一个短暂的本能反应），不要把之前已经描述过的场景再写一遍，最后再把行动交还给玩家。失败也要让剧情推进（付出代价、引来麻烦、浪费时间），不要只说"什么都没发现"。
 - 玩家可以对失败的普通技能检定"孤注一掷"重骰一次（理智、幸运、心理学和战斗相关的检定不能）。玩家掷骰失败后会先决定要不要孤注一掷，【骰子】结果里会写明玩家的选择；如果玩家选择孤注一掷，你会先收到 TA 打算怎么更努力，再收到重骰的结果。孤注一掷再失败时，要给出严重的后果。`,
     trpg.notebook ? `\n${NOTEBOOK_RULES}` : '',
     trpg.memo ? `\n${MEMO_RULES}` : '',
@@ -218,9 +219,16 @@ export function buildKpMessages(room: Room, kp: Participant, history: Message[])
   }
   // 最后一条消息末尾：当前状态 + 一句提醒（离生成位置最近，最不容易被忽略）
   const mates = teammatesOf(room).map((p) => room.trpg!.sheets[p.id]?.name ?? p.name);
-  const reminder = mates.length
-    ? `（请以守秘人的身份继续。${mates.map((n) => `「${n}」`).join('、')}会在你之后自己发言，不要替${mates.length > 1 ? '他们' : 'TA'}说台词或决定行动。）`
-    : '（请以守秘人的身份继续，不要替玩家说台词或决定行动。）';
+  const boundary = mates.length
+    ? `${mates.map((n) => `「${n}」`).join('、')}会在你之后自己发言，不要替${mates.length > 1 ? '他们' : 'TA'}说台词或决定行动。`
+    : '不要替玩家说台词或决定行动。';
+  // 刚掷完骰子：从结果接着写，不要把场景再描述一遍
+  const lastReal = [...history].reverse().find((m) => m.kind !== 'note' && m.status !== 'error');
+  const afterRoll = lastReal?.kind === 'roll' && !lastReal.roll?.pending;
+  const pacing = afterRoll
+    ? '上面是刚掷出的骰子结果：从结果直接接着写，写清它带来的后果或调查员的反应，不要把前面已经描述过的场景再写一遍，然后把行动交还给玩家。'
+    : '要求检定时，写到需要掷骰的那一刻就停下，不要在同一条消息里再问玩家打算怎么做。';
+  const reminder = `（请以守秘人的身份继续。${boundary}${pacing}）`;
   turns[turns.length - 1].content += `\n\n${kpStateBlock(room)}\n\n${reminder}`;
   return [{ role: 'system', content: buildKpSystemPrompt(room, kp) }, ...turns];
 }

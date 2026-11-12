@@ -16,15 +16,17 @@ import {
   Share2,
   SkipForward,
   Square,
+  ArrowDown,
   Trash2,
   Users,
   X,
 } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { otherSpeakerNames } from '../../../shared/text';
 import { del, patch, post } from '../api';
 import { askConfirm } from '../confirm';
 import { attempt, toast } from '../toast';
+import { useFollowStream } from '../prefs';
 import { useRoom } from '../useRoom';
 import { AssistantPanel } from './AssistantPanel';
 import { CastBar } from './CastBar';
@@ -75,7 +77,14 @@ export function RoomView({
     if (room && value.trim() && value.trim() !== room.title) await renameRoom(room.id, value);
   };
   const listRef = useRef<HTMLDivElement>(null);
-  const stickToBottom = useRef(true);
+  // 滚动：nearBottom = 现在停在最底下；pinned = 正在把最新一条消息带进视野
+  const nearBottom = useRef(true);
+  const pinned = useRef(true);
+  const lastSetTop = useRef(-1);
+  const lastTop = useRef(0);
+  const justSent = useRef(false);
+  const [showJump, setShowJump] = useState(false);
+  const followStream = useFollowStream();
   const trpg = room?.mode === 'trpg';
   const activeTab: Tab = tab ?? (trpg ? 'sheet' : 'participants');
 
@@ -86,24 +95,64 @@ export function RoomView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [metaKey]);
 
-  // 新消息自动滚到底部（如果你正在往上翻看历史就不打扰）
+  /**
+   * 新消息出现时（你停在最底下的话）把它带进视野。
+   * 默认只滚到这条消息的开头到达屏幕顶部为止，之后不再跟着输出往下滚，方便从头阅读；
+   * 设置里打开「跟随最新文字」则一直滚到底。你往上翻看时不打扰。
+   */
   const lastMsg = room?.messages.at(-1);
-  useEffect(() => {
+  const count = room?.messages.length ?? 0;
+  const prevCount = useRef(count);
+  const setTop = (el: HTMLElement, top: number) => {
+    lastSetTop.current = Math.round(top);
+    el.scrollTop = top;
+  };
+  const isNearBottom = (el: HTMLElement) => el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+  useLayoutEffect(() => {
     const el = listRef.current;
-    if (el && stickToBottom.current) el.scrollTop = el.scrollHeight;
-  }, [room?.messages.length, lastMsg?.content, lastMsg?.reasoning, lastMsg?.roll?.pending]);
+    if (!el) return;
+    // 新消息：只有你停在最底下（或者刚发完言）时才把它带进视野；你还在读上一条长消息时不打扰
+    if (count > prevCount.current) {
+      pinned.current = nearBottom.current || justSent.current;
+      justSent.current = false;
+    }
+    prevCount.current = count;
+    if (pinned.current) {
+      const bottom = el.scrollHeight - el.clientHeight;
+      let target = bottom;
+      if (!followStream) {
+        // 最新一条消息的开头最多滚到屏幕顶部
+        const last = el.querySelector('.messages-inner')?.lastElementChild as HTMLElement | null;
+        if (last) {
+          const top = last.getBoundingClientRect().top - el.getBoundingClientRect().top + el.scrollTop - 12;
+          target = Math.min(bottom, top);
+        }
+      }
+      if (target > el.scrollTop + 1) setTop(el, target);
+    }
+    nearBottom.current = isNearBottom(el);
+    setShowJump(!nearBottom.current);
+  }, [count, lastMsg?.content, lastMsg?.reasoning, lastMsg?.plan, lastMsg?.roll?.pending, followStream]);
 
-  // 输入区变高（比如出现行动建议）时，保持停在底部
+  // 输入区变高（比如出现行动建议）时，停在底部的话继续停在底部
   const hasRoom = !!room;
   useEffect(() => {
     const el = listRef.current;
     if (!el) return;
     const ro = new ResizeObserver(() => {
-      if (stickToBottom.current) el.scrollTop = el.scrollHeight;
+      if (nearBottom.current) setTop(el, el.scrollHeight);
     });
     ro.observe(el);
     return () => ro.disconnect();
   }, [hasRoom]);
+
+  const jumpToLatest = () => {
+    const el = listRef.current;
+    if (!el) return;
+    pinned.current = true;
+    lastSetTop.current = -1;
+    el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+  };
 
   const base = `/rooms/${roomId}`;
   const onEdit = useCallback((id: string, content: string) => void attempt(() => patch(`${base}/messages/${id}`, { content })), [base]);
@@ -320,49 +369,62 @@ export function RoomView({
 
         <CastBar room={room} runner={runner} />
 
-        <div
-          className="messages"
-          ref={listRef}
-          onScroll={(e) => {
-            const el = e.currentTarget;
-            stickToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
-          }}
-        >
-          {needSetup ? (
-            <TrpgSetup room={room} onCreate={() => setWizard(true)} />
-          ) : room.messages.length === 0 ? (
-            <div className="empty">
-              <div className="empty-icon">
-                <MessagesSquare />
+        <div className="messages-wrap">
+          <div
+            className="messages"
+            ref={listRef}
+            onScroll={(e) => {
+              const el = e.currentTarget;
+              // 你自己往上翻：不再自动滚动，直到你回到最底下
+              const ours = Math.abs(el.scrollTop - lastSetTop.current) <= 2;
+              if (!ours && el.scrollTop < lastTop.current - 2) pinned.current = false;
+              lastTop.current = el.scrollTop;
+              nearBottom.current = isNearBottom(el);
+              if (nearBottom.current) pinned.current = true;
+              setShowJump(!nearBottom.current);
+            }}
+          >
+            {needSetup ? (
+              <TrpgSetup room={room} onCreate={() => setWizard(true)} />
+            ) : room.messages.length === 0 ? (
+              <div className="empty">
+                <div className="empty-icon">
+                  <MessagesSquare />
+                </div>
+                <p>
+                  {room.settings.promptMode === 'humanlike'
+                    ? '点上方的「开始自动对话」，让 AI 们像真人一样聊起来；你也可以先说第一句。'
+                    : room.settings.humanRole === 'host'
+                      ? '你是主持人。先在下面说一句开场白、抛出话题，AI 们就会接话。'
+                      : '在下面说点什么，或者点「开始自动对话」让 AI 们先聊起来。'}
+                </p>
               </div>
-              <p>
-                {room.settings.promptMode === 'humanlike'
-                  ? '点上方的「开始自动对话」，让 AI 们像真人一样聊起来；你也可以先说第一句。'
-                  : room.settings.humanRole === 'host'
-                    ? '你是主持人。先在下面说一句开场白、抛出话题，AI 们就会接话。'
-                    : '在下面说点什么，或者点「开始自动对话」让 AI 们先聊起来。'}
-              </p>
-            </div>
-          ) : (
-            <div className="messages-inner">
-              {room.messages.map((m, i) => (
-                <MessageItem
-                  key={m.id}
-                  message={m}
-                  isLast={i === room.messages.length - 1}
-                  isKp={!!kpId && m.participantId === kpId}
-                  playerName={trpg ? t?.sheets.player?.name : undefined}
-                  onEdit={onEdit}
-                  onDelete={onDelete}
-                  onRegenerate={onRegenerate}
-                  onRoll={onRoll}
-                  onPush={onPush}
-                  onAccept={onAccept}
-                  onOpenNotes={onOpenNotes}
-                  hideNames={m.participantId ? namesById.get(m.participantId) : undefined}
-                />
-              ))}
-            </div>
+            ) : (
+              <div className="messages-inner">
+                {room.messages.map((m, i) => (
+                  <MessageItem
+                    key={m.id}
+                    message={m}
+                    isLast={i === room.messages.length - 1}
+                    isKp={!!kpId && m.participantId === kpId}
+                    playerName={trpg ? t?.sheets.player?.name : undefined}
+                    onEdit={onEdit}
+                    onDelete={onDelete}
+                    onRegenerate={onRegenerate}
+                    onRoll={onRoll}
+                    onPush={onPush}
+                    onAccept={onAccept}
+                    onOpenNotes={onOpenNotes}
+                    hideNames={m.participantId ? namesById.get(m.participantId) : undefined}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+          {showJump && room.messages.length > 0 && (
+            <button className="jump-latest" onClick={jumpToLatest}>
+              <ArrowDown /> 回到最新
+            </button>
           )}
         </div>
 
@@ -371,7 +433,8 @@ export function RoomView({
           runner={runner}
           disabled={needSetup ? '先创建调查员并开始游戏…' : undefined}
           onSend={async (content, opts) => {
-            stickToBottom.current = true;
+            justSent.current = true;
+            pinned.current = true;
             return !!(await attempt(() => post(`${base}/messages`, { content, ...opts })));
           }}
         />

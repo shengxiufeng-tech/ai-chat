@@ -806,6 +806,21 @@ export function resolveTarget(sheet: InvestigatorSheet, rawName: string): { name
 export const COMMAND_RE =
   /[[【]\s*(检定|理智|掷骰|HP|MP|SAN|幸运|物品|NPC|线索|备忘|成长)\s*(?:[:：]\s*([^\]】\n]{1,240}))?[\]】]/gi;
 
+/** 把指令换成看得懂的文字，例如 [理智:0/1] → 「理智 0/1」（规则小贴士里引用指令时用） */
+export function readableCommands(text: string) {
+  return text.replace(COMMAND_RE, (_m, kind: string, args?: string) => `「${kind}${args ? ` ${args.trim().replace(/[:：]/g, ' ')}` : ''}」`);
+}
+
+/** 守秘人消息的显示文字：去掉指令，但「规则小贴士」里引用的指令换成文字（否则会留下空白） */
+export function kpDisplayText(text: string) {
+  return stripCommands(
+    text
+      .split('\n')
+      .map((line) => (/^\s*[【[]规则小贴士[】\]]/.test(line) ? readableCommands(line) : line))
+      .join('\n'),
+  );
+}
+
 /** 去掉消息里的守秘人指令（显示用） */
 export function stripCommands(text: string) {
   return text

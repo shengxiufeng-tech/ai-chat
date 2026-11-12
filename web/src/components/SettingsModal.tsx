@@ -8,12 +8,14 @@ import { CacheDiagnostics } from './CacheDiagnostics';
 import { Modal } from './Modal';
 import { ModelInput } from './ModelInput';
 import { PhoneAccess } from './PhoneAccess';
-import { Field } from './ui';
+import { setFollowStream, useFollowStream } from '../prefs';
+import { Field, ToggleRow } from './ui';
 
 export function SettingsModal({ onClose }: { onClose: () => void }) {
   const [s, setS] = useState<AppSettings | null>(null);
   const [testResult, setTestResult] = useState<{ ok: boolean; text: string } | null>(null);
   const [testing, setTesting] = useState(false);
+  const followStream = useFollowStream();
 
   useEffect(() => {
     void attempt(() => get<AppSettings>('/settings')).then((x) => x && setS(x));
@@ -77,6 +79,13 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
             <span>{testResult.text}</span>
           </div>
         )}
+        <div className="divider" />
+        <ToggleRow
+          label="回复生成时跟着滚到最新的文字"
+          hint="默认关闭：新回复出现时只滚到它的开头，之后不再跟着往下滚，方便从头阅读；下面还有内容时会出现「回到最新」按钮。这个设置只对当前设备有效。"
+          checked={followStream}
+          onChange={setFollowStream}
+        />
         <div className="divider" />
         <PhoneAccess />
         <div className="divider" />

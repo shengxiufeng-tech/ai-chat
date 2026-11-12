@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { parseCheckModifier, quickInvestigator, rollText, splitInlineModifier, type RollRecord, type TrpgState } from '../shared/coc.ts';
+import { kpDisplayText, parseCheckModifier, quickInvestigator, rollText, splitInlineModifier, type RollRecord, type TrpgState } from '../shared/coc.ts';
 import type { Message, Participant, Room } from '../shared/types.ts';
 import { DEFAULT_ROOM_SETTINGS } from '../shared/types.ts';
 import { parseModel } from './llm.ts';
@@ -300,7 +300,24 @@ test('提醒守秘人不要替调查员说话：系统提示写明边界，最�
   const kp = buildKpMessages(room, room.participants[0], room.messages);
   assert.match(kp[0].content, /玩家和 AI 队友（「张三」、「林薇」）都会自己发言/);
   assert.match(kp[0].content, /可以描述外界对他们的影响/); // 允许描写影响和结果，不过度限制
-  assert.match(kp.at(-1)!.content, /「林薇」会在你之后自己发言，不要替TA说台词或决定行动。）$/);
+  assert.match(kp.at(-1)!.content, /「林薇」会在你之后自己发言，不要替TA说台词或决定行动。/);
+  // 平时：要求检定时停在掷骰那一刻
+  assert.match(kp.at(-1)!.content, /写到需要掷骰的那一刻就停下，不要在同一条消息里再问玩家打算怎么做。）$/);
+});
+
+test('刚掷完骰子：提醒守秘人从结果接着写，不要重复场景', () => {
+  const room = trpgRoom();
+  const roll: RollRecord = { type: 'san', actor: 'player', actorName: '张三', pending: false, label: '理智', sanSuccess: '0', sanFail: '1d3', total: 70, success: false, loss: 2, before: 50, after: 48, lossDetail: '1d3(2) = 2', target: 50 };
+  room.messages = [
+    msg({ role: 'human', content: '我推开门', speakerName: '小明' }),
+    msg({ role: 'ai', participantId: 'kp', speakerName: '守秘人', content: '门后是……[理智:0/1d3]' }),
+    msg({ role: 'system', kind: 'roll', roll, speakerName: '骰子', content: '' }),
+    msg({ role: 'system', kind: 'note', speakerName: '笔记', content: '' }),
+  ];
+  const last = buildKpMessages(room, room.participants[0], room.messages).at(-1)!.content;
+  assert.match(last, /从结果直接接着写/);
+  assert.match(last, /不要把前面已经描述过的场景再写一遍/);
+  assert.doesNotMatch(last, /不要在同一条消息里再问玩家/);
 });
 
 test('秘密备忘：只有守秘人能看到，队友、规则助手和显示内容里都没有', () => {
@@ -516,4 +533,9 @@ test('解析修正参数', () => {
   assert.equal(parseCheckModifier('奖励1'), null);
   assert.deepEqual(splitInlineModifier('幸运-1d20'), { skill: '幸运', modifier: { kind: 'delta', sign: -1, expr: '1d20' } });
   assert.deepEqual(splitInlineModifier('射击(手枪)'), { skill: '射击(手枪)' });
+});
+
+test('规则小贴士里引用的指令显示成文字，正文里的指令直接去掉', () => {
+  const text = '你看到了不该看的东西。[理智:0/1]\n【规则小贴士】理智检定：标记为 [理智:0/1] 意味着成功不扣理智，失败扣 1 点。';
+  assert.equal(kpDisplayText(text), '你看到了不该看的东西。\n【规则小贴士】理智检定：标记为 「理智 0/1」 意味着成功不扣理智，失败扣 1 点。');
 });
