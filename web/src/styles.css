@@ -1813,6 +1813,30 @@ mark {
   }
 }
 
+.pregen-card.taken {
+  border-color: var(--accent);
+}
+
+.pregen-name-input {
+  font-weight: 650;
+  height: 32px;
+  padding: 0 8px;
+  margin-bottom: 2px;
+}
+
+.sheet-name {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.sheet-name-input {
+  font-size: 15px;
+  font-weight: 650;
+  height: 30px;
+  padding: 0 8px;
+}
+
 /* 构思 / 执笔 */
 .model-pair {
   display: inline-flex;

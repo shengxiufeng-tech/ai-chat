@@ -497,6 +497,13 @@ async function mockAgentReply(opts: ToolChatOptions): Promise<AgentReply> {
         skills: { 侦查: 60, 图书馆使用: 70, 话术: 45 },
         items: ['笔记本'],
       }),
+      call('add_pregen', {
+        name: '热情的研究生（姓名自定）',
+        occupation: '研究生',
+        age: 24,
+        characteristics: { STR: 45, CON: 55, SIZ: 50, DEX: 60, APP: 65, INT: 80, POW: 60, EDU: 70 },
+        skills: { 图书馆使用: 65, 历史: 50 },
+      }),
     ],
     [
       call('write', { field: 'title', content: '模拟 PDF 剧本' }),

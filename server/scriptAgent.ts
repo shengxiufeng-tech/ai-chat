@@ -7,7 +7,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { buildSheet, resolveTarget, type CharKey, type Characteristics, type InvestigatorSheet } from '../shared/coc.ts';
+import { buildSheet, isPlaceholderName, resolveTarget, type CharKey, type Characteristics, type InvestigatorSheet } from '../shared/coc.ts';
 import {
   DEFAULT_EXCLUDED,
   PAGE_CATEGORY_LABELS,
@@ -124,7 +124,7 @@ export const TOOLS: ToolDef[] = [
     'add_pregen',
     '录入一位剧本自带的预设调查员。技能名用中文（侦查、聆听、图书馆使用……），只写比基础值高的技能也可以。',
     {
-      name: { type: 'string' },
+      name: { type: 'string', description: '卡上写的姓名（外文写中文译名）。卡上没有固定姓名（比如写着「姓名自定」）时留空，身份描述写进 occupation 或 backstory' },
       occupation: { type: 'string' },
       age: { type: 'integer' },
       gender: { type: 'string' },
@@ -222,12 +222,19 @@ function toCharacteristics(input: unknown): Characteristics {
 /** 把模型录入的预设调查员变成完整的角色卡（没写的技能用基础值） */
 export function pregenSheet(a: Record<string, unknown>, era: '1920s' | 'modern'): InvestigatorSheet {
   const characteristics = toCharacteristics(a.characteristics);
+  const rawName = String(a.name ?? '').trim();
+  // 「热情的研究生（姓名自定）」：没有固定姓名，名字留给玩家起，描述放进背景里
+  const placeholder = isPlaceholderName(rawName);
+  const descriptor = placeholder ? rawName.replace(/[（(][^）)]*[）)]/g, '').trim() : '';
+  const backstory = [descriptor && !String(a.backstory ?? '').includes(descriptor) ? `剧本里的身份：${descriptor}` : '', String(a.backstory ?? '').trim()]
+    .filter(Boolean)
+    .join('\n');
   const sheet = buildSheet({
-    name: String(a.name ?? '').trim() || '预设调查员',
+    name: placeholder ? '' : rawName,
     occupation: String(a.occupation ?? '').trim() || '调查员',
     age: Math.round(Number(a.age)) || 30,
     gender: String(a.gender ?? ''),
-    backstory: String(a.backstory ?? ''),
+    backstory,
     characteristics,
     luck: Math.round(Number(a.luck)) || 50,
     allocation: {},
@@ -248,6 +255,7 @@ export function pregenSheet(a: Record<string, unknown>, era: '1920s' | 'modern')
   if (hp) sheet.hp = { current: hp, max: hp };
   if (mp) sheet.mp = { current: mp, max: mp };
   if (san) sheet.san = { ...sheet.san, current: san, start: san };
+  if (placeholder) sheet.name = '';
   return sheet;
 }
 
@@ -368,10 +376,10 @@ export function execTool(ws: Workspace, call: ToolCall): ToolResult {
       case 'add_pregen': {
         const era = classifyEra(ws.fields.era ?? '');
         const sheet = pregenSheet(a, era);
-        const i = ws.pregens.findIndex((x) => x.name === sheet.name);
+        const i = sheet.name ? ws.pregens.findIndex((x) => x.name === sheet.name) : -1;
         if (i >= 0) ws.pregens[i] = sheet;
         else ws.pregens.push(sheet);
-        return { text: `已录入预设调查员「${sheet.name}」（${sheet.occupation}）。`, activity: '录入了一位预设调查员' };
+        return { text: `已录入预设调查员「${sheet.name || '（姓名由玩家决定）'}」（${sheet.occupation}）。`, activity: '录入了一位预设调查员' };
       }
       case 'finish':
         return { text: '好的。', finished: true, activity: '整理完成' };

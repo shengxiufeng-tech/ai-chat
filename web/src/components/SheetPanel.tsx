@@ -1,4 +1,4 @@
-import { Brain, Clover, Heart, Minus, Plus, Sparkles, TrendingUp, UserRound, X } from 'lucide-react';
+import { Brain, Clover, Heart, Minus, Pencil, Plus, Sparkles, TrendingUp, UserRound, Users, X } from 'lucide-react';
 import { useState, type ReactNode } from 'react';
 import {
   CHAR_DESC,
@@ -11,6 +11,7 @@ import {
 import type { Room } from '../../../shared/types';
 import { post, put } from '../api';
 import { attempt } from '../toast';
+import { PregenPicker } from './PregenPicker';
 import { Segmented } from './ui';
 
 export function SheetPanel({ room, onCreate }: { room: Room; onCreate: () => void }) {
@@ -20,6 +21,8 @@ export function SheetPanel({ room, onCreate }: { room: Room; onCreate: () => voi
   const key = keys.includes(selected) ? selected : 'player';
   const sheet = trpg.sheets[key];
   const save = (next: InvestigatorSheet) => attempt(() => put(`/rooms/${room.id}/trpg/sheets/${key}`, { sheet: next }));
+  const [picking, setPicking] = useState(false);
+  const pregens = trpg.pregens ?? [];
 
   return (
     <div className="panel-section">
@@ -51,6 +54,15 @@ export function SheetPanel({ room, onCreate }: { room: Room; onCreate: () => voi
               <span className="hint">模组结束后，对这次成功使用过的技能做成长检定。守秘人结团时也会提醒你。</span>
             </div>
           )}
+          {pregens.length > 0 && (
+            <div className="growth-entry">
+              <button className="btn btn-sm" onClick={() => setPicking(true)}>
+                <Users /> 剧本里的调查员（{pregens.length} 位）
+              </button>
+              <span className="hint">换成剧本自带的调查员，或者交给 AI 队友扮演。</span>
+            </div>
+          )}
+          {picking && <PregenPicker room={room} onClose={() => setPicking(false)} />}
         </>
       ) : (
         <div className="empty" style={{ marginTop: 40 }}>
@@ -120,6 +132,12 @@ export function SheetView({
 }) {
   const [newItem, setNewItem] = useState('');
   const [showAll, setShowAll] = useState(false);
+  const [renaming, setRenaming] = useState(false);
+  const rename = (value: string) => {
+    setRenaming(false);
+    const name = value.trim();
+    if (name && name !== sheet.name) onChange?.({ ...structuredClone(sheet), name });
+  };
   const c = sheet.characteristics;
   const clone = () => structuredClone(sheet);
   const adjust = (k: 'hp' | 'mp' | 'san', delta: number) => {
@@ -135,8 +153,33 @@ export function SheetView({
     <div className="sheet">
       <div className="sheet-head">
         <div className="sheet-portrait">{sheet.name.slice(0, 1)}</div>
-        <div className="grow">
-          <div className="sheet-name">{sheet.name}</div>
+        <div className="grow" style={{ minWidth: 0 }}>
+          {renaming ? (
+            <input
+              className="sheet-name-input"
+              defaultValue={sheet.name}
+              autoFocus
+              aria-label="调查员的名字"
+              onFocus={(e) => e.target.select()}
+              onBlur={(e) => rename(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.nativeEvent.isComposing && e.keyCode !== 229) e.currentTarget.blur();
+                if (e.key === 'Escape') {
+                  e.currentTarget.value = sheet.name;
+                  e.currentTarget.blur();
+                }
+              }}
+            />
+          ) : (
+            <div className="sheet-name">
+              {sheet.name || '（还没有名字）'}
+              {editable && (
+                <button className="icon-btn sm" title="改名" aria-label="改名" onClick={() => setRenaming(true)}>
+                  <Pencil />
+                </button>
+              )}
+            </div>
+          )}
           <div className="sheet-occ">
             {sheet.occupation} · {sheet.age} 岁{sheet.gender ? ` · ${sheet.gender}` : ''}
           </div>

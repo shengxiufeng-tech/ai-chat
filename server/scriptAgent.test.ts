@@ -5,6 +5,7 @@ import path from 'node:path';
 import { test } from 'node:test';
 import { crop, decodeJpeg, encodeJpeg, fit, normalizeBox } from './images.ts';
 import { ImportManager } from './imports.ts';
+import { isPlaceholderName } from '../shared/coc.ts';
 import { assemble, compactImages, execTool, parsePages, pregenSheet, rangeText, runScriptAgent, runScriptAgentWith, type Workspace } from './scriptAgent.ts';
 import type { AgentMessage } from './llm.ts';
 
@@ -114,6 +115,8 @@ test('整理助手（模拟模型）：分类、看图片页、保存地图和�
   assert.deepEqual(ws.seen.sort(), [3, 4, 5]);
   assert.deepEqual(ws.assets.map((a) => [a.kind, a.visibility]), [['map', 'keeper'], ['handout', 'player']]);
   assert.equal(ws.pregens[0].name, '模拟调查员');
+  assert.equal(ws.pregens[1].name, '', '「姓名自定」的调查员名字留给玩家起');
+  assert.match(ws.pregens[1].backstory, /剧本里的身份：热情的研究生/);
   assert.ok(log.includes('查看第 3 页') && log.includes('整理完成'));
   assert.ok(!log.some((l) => l.includes('模拟剪报')), '进度里没有手出物的标题');
 
@@ -174,7 +177,7 @@ test('导入任务：上传、后台整理、进度、结果、拷贝图片', as
   const { assets, pregens } = again.takeAssets(job.id, dest);
   assert.equal(assets.length, 2);
   assert.ok(fs.existsSync(path.join(dest, `${assets[0].id}.jpg`)));
-  assert.equal(pregens?.length, 1);
+  assert.equal(pregens?.length, 2);
 });
 
 test('导入任务可以取消', async () => {
@@ -212,4 +215,9 @@ test('一步最多看 6 张图片，多出来的请模型下一步再看', async
   await runScriptAgentWith(fake as never, ws, { baseUrl: 'x', apiKey: '', model: 'm', signal: new AbortController().signal, hooks: hooks().hooks });
   assert.deepEqual(imagesPerRequest, [6], '第二次请求里只带了 6 张图片');
   assert.equal(ws.seen.length, 6, '多出来的 3 页不算看过');
+});
+
+test('剧本里没有固定姓名的调查员', () => {
+  for (const n of ['', '热情的研究生（姓名自定）', '（玩家自拟）', '无名调查员', '???', 'XXX']) assert.ok(isPlaceholderName(n), n);
+  for (const n of ['哈维·沃尔特斯', 'Harvey Walters', '林薇']) assert.ok(!isPlaceholderName(n), n);
 });

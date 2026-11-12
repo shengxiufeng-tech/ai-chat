@@ -810,6 +810,12 @@ export function resolveTarget(sheet: InvestigatorSheet, rawName: string): { name
 
 // ---------------- 文本 ----------------
 
+/** 剧本里没有给定姓名的调查员（「姓名自定」「热情的研究生（姓名自定）」之类） */
+export function isPlaceholderName(name: string) {
+  const n = name.trim();
+  return !n || /自定|自拟|自取|自选|自填|待定|玩家决定|由玩家|姓名|名字|未命名|无名|[?？]|^x+$/i.test(n);
+}
+
 /** 守秘人指令的正则：[检定:侦查]、【理智：1/1d6】等 */
 export const COMMAND_RE =
   /[[【]\s*(检定|理智|掷骰|HP|MP|SAN|幸运|物品|NPC|线索|备忘|成长|展示)\s*(?:[:：]\s*([^\]】\n]{1,240}))?[\]】]/gi;
