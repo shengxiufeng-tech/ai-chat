@@ -134,6 +134,8 @@ export const EXPORT_CSS = `
 .export-doc details.x-think div{border-left:2px solid var(--border);padding-left:10px;margin-top:4px}
 .export-doc .x-roll{align-self:center;font-size:12.5px;color:var(--text2);background:var(--surface);border:1px solid var(--border);border-radius:999px;padding:4px 14px;max-width:92%;text-align:center}
 .export-doc .x-roll b{color:var(--text)}
+.export-doc .x-handout{align-self:center;display:flex;flex-direction:column;align-items:center;gap:8px;max-width:92%}
+.export-doc .x-handout img{display:block;max-width:100%;max-height:900px;border-radius:10px;border:1px solid var(--border);background:#f4efe6}
 .export-doc .x-foot{margin-top:26px;padding-top:14px;border-top:1px solid var(--border);font-size:11.5px;color:var(--text3);display:flex;justify-content:space-between}
 body.x-page{margin:0;padding:32px 16px;background:#e9ebf0;display:flex;justify-content:center}
 body.x-page.dark{background:#07080b}

@@ -1,6 +1,6 @@
 import { toBlob, toPng } from 'html-to-image';
 import { ClipboardCopy, Code2, FileJson, FileText, Image as ImageIcon, Loader2, Share2 } from 'lucide-react';
-import { forwardRef, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { forwardRef, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { effortLabel, type Message, type Room } from '../../../shared/types';
@@ -54,6 +54,28 @@ export function ExportModal({ room, onClose }: { room: Room; onClose: () => void
   }, [room.messages, range, recent, from, to, o.rolls]);
 
   const base = room.title || '对话';
+
+  // 手出物 / 地图图片：先转成内嵌的 data URL，网页文件和长图里都能带上（不依赖这台电脑上的服务）
+  const handoutIds = useMemo(() => [...new Set(room.messages.filter((m) => m.kind === 'handout' && m.asset).map((m) => m.asset!.id))].join(','), [room.messages]);
+  const [images, setImages] = useState<Record<string, string>>({});
+  useEffect(() => {
+    let stop = false;
+    void (async () => {
+      const out: Record<string, string> = {};
+      for (const id of handoutIds.split(',').filter(Boolean)) {
+        try {
+          const res = await fetch(`/api/rooms/${room.id}/assets/${id}`);
+          if (res.ok) out[id] = await blobToDataUrl(await res.blob());
+        } catch {
+          // 图片拿不到就只显示文字
+        }
+      }
+      if (!stop) setImages(out);
+    })();
+    return () => {
+      stop = true;
+    };
+  }, [room.id, handoutIds]);
 
   const imageOptions = () => {
     const node = docRef.current!;
@@ -192,7 +214,7 @@ export function ExportModal({ room, onClose }: { room: Room; onClose: () => void
             <ToggleRow label="时间" checked={o.time} onChange={(v) => set('time', v)} />
             <ToggleRow label="思考过程" checked={o.reasoning} onChange={(v) => set('reasoning', v)} />
             <ToggleRow label={room.mode === 'trpg' ? '剧本简介' : '场景 / 话题'} checked={o.scenario} onChange={(v) => set('scenario', v)} />
-            {room.mode === 'trpg' && <ToggleRow label="骰子、数值和笔记提示" checked={o.rolls} onChange={(v) => set('rolls', v)} />}
+            {room.mode === 'trpg' && <ToggleRow label="骰子、数值、笔记和手出物" checked={o.rolls} onChange={(v) => set('rolls', v)} />}
           </div>
           <div className="divider" />
           <div className="export-actions">
@@ -207,15 +229,15 @@ export function ExportModal({ room, onClose }: { room: Room; onClose: () => void
           </span>
         </div>
         <div className="export-preview-wrap">
-          <ExportDocView ref={docRef} room={room} messages={messages} o={o} />
+          <ExportDocView ref={docRef} room={room} messages={messages} o={o} images={images} />
         </div>
       </div>
     </Modal>
   );
 }
 
-const ExportDocView = forwardRef<HTMLDivElement, { room: Room; messages: Message[]; o: ExportOptions }>(function ExportDocView(
-  { room, messages, o },
+const ExportDocView = forwardRef<HTMLDivElement, { room: Room; messages: Message[]; o: ExportOptions; images: Record<string, string> }>(function ExportDocView(
+  { room, messages, o, images },
   ref,
 ) {
   const date = new Date();
@@ -247,10 +269,19 @@ const ExportDocView = forwardRef<HTMLDivElement, { room: Room; messages: Message
       </div>
       <div className="x-msgs">
         {visible.map((m) => {
+          if (m.kind === 'handout') {
+            const src = m.asset ? images[m.asset.id] : undefined;
+            return (
+              <div key={m.id} className="x-handout">
+                <div className="x-roll">📜 {m.content}</div>
+                {src && <img src={src} alt={m.asset?.title ?? ''} />}
+              </div>
+            );
+          }
           if (m.kind) {
             return (
               <div key={m.id} className="x-roll">
-                {m.kind === 'note' ? '📒' : m.kind === 'handout' ? '📜' : '🎲'} {m.content}
+                {m.kind === 'note' ? '📒' : '🎲'} {m.content}
               </div>
             );
           }
