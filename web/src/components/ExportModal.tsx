@@ -16,6 +16,7 @@ import {
   type ExportOptions,
 } from '../exportDoc';
 import { copyText } from '../clipboard';
+import { blobToDataUrl } from '../pdf';
 import { shortModel } from '../models';
 import { toast } from '../toast';
 import { splitTips } from './MessageItem';
@@ -128,13 +129,19 @@ export function ExportModal({ room, onClose }: { room: Room; onClose: () => void
       icon: <FileJson />,
       label: '备份 JSON',
       fn: () =>
-        run('导出 JSON', () =>
+        run('导出 JSON', async () => {
+          // 手出物和地图是单独的图片文件，备份时一起打包进去（导入时写回新房间）
+          const assets: Record<string, string> = {};
+          for (const a of room.trpg?.assets ?? []) {
+            const res = await fetch(`/api/rooms/${room.id}/assets/${a.id}`);
+            if (res.ok) assets[a.id] = await blobToDataUrl(await res.blob());
+          }
           download(
             `${base}.ai-chat.json`,
-            JSON.stringify({ format: 'ai-chat-room', version: 2, exportedAt: Date.now(), room }, null, 2),
+            JSON.stringify({ format: 'ai-chat-room', version: 3, exportedAt: Date.now(), room, ...(Object.keys(assets).length ? { assets } : {}) }, null, 2),
             'application/json',
-          ),
-        ),
+          );
+        }),
     },
   ];
 
@@ -195,7 +202,9 @@ export function ExportModal({ room, onClose }: { room: Room; onClose: () => void
               </button>
             ))}
           </div>
-          <span className="hint">JSON 备份始终包含整个房间（角色、设置、全部消息），可以在左侧栏「导入」恢复，也可以发给别人导入。</span>
+          <span className="hint">
+            JSON 备份始终包含整个房间（角色、设置、全部消息{room.trpg?.assets?.length ? `，以及 ${room.trpg.assets.length} 张手出物和地图图片` : ''}），可以在左侧栏「导入」恢复，也可以发给别人导入。
+          </span>
         </div>
         <div className="export-preview-wrap">
           <ExportDocView ref={docRef} room={room} messages={messages} o={o} />

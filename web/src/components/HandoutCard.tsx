@@ -27,6 +27,7 @@ export function Lightbox({ src, title, onClose }: { src: string; title: string; 
 /** 对话里：守秘人展示的手出物 / 地图 */
 export function HandoutCard({ roomId, asset }: { roomId: string; asset: { id: string; title: string; kind: AssetKind } }) {
   const [open, setOpen] = useState(false);
+  const [missing, setMissing] = useState(false);
   const src = assetUrl(roomId, asset.id);
   const label = ASSET_KIND_LABELS[asset.kind];
   return (
@@ -39,12 +40,16 @@ export function HandoutCard({ roomId, asset }: { roomId: string; asset: { id: st
             <b>「{asset.title}」</b>
           </span>
         </div>
-        <button className="handout-img" onClick={() => setOpen(true)} title="点击放大">
-          <img src={src} alt={asset.title} loading="lazy" />
-          <span className="handout-zoom">
-            <ZoomIn /> 放大
-          </span>
-        </button>
+        {missing ? (
+          <div className="handout-missing">图片不在这台电脑上（可能是从不带图片的旧备份导入的）。</div>
+        ) : (
+          <button className="handout-img" onClick={() => setOpen(true)} title="点击放大">
+            <img src={src} alt={asset.title} loading="lazy" onError={() => setMissing(true)} />
+            <span className="handout-zoom">
+              <ZoomIn /> 放大
+            </span>
+          </button>
+        )}
       </figure>
       {open && <Lightbox src={src} title={`${label}「${asset.title}」`} onClose={() => setOpen(false)} />}
     </div>

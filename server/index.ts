@@ -45,7 +45,10 @@ const imports = new ImportManager(path.join(DATA_DIR, 'imports'));
 const assetsDir = (roomId: string) => path.join(DATA_DIR, 'assets', roomId);
 const runners = new RunnerManager(store);
 const app = express();
-app.use(express.json({ limit: '25mb' }));
+// 导入房间备份可能带着手出物和地图图片，单独放宽大小限制
+const jsonSmall = express.json({ limit: '25mb' });
+const jsonLarge = express.json({ limit: '300mb' });
+app.use((req, res, next) => (req.path === '/api/rooms/import' ? jsonLarge : jsonSmall)(req, res, next));
 // 其他设备（手机）要先输入访问码；本机访问不受影响
 const access = new AccessControl(DATA_DIR);
 app.use(access.middleware);
@@ -315,9 +318,10 @@ app.use('/api/pdfjs/standard_fonts', express.static(path.join(pdfjsDir, 'standar
 app.get('/api/rooms/:id/assets/:assetId', (req, res) => {
   const room = store.getRoom(param(req, 'id'));
   const asset = room?.trpg?.assets?.find((a) => a.id === param(req, 'assetId'));
-  if (!room || !asset) return res.status(404).json({ error: '图片不存在' });
+  const file = path.join(assetsDir(room?.id ?? '_'), `${asset?.id}.jpg`);
+  if (!room || !asset || !fs.existsSync(file)) return res.status(404).json({ error: '图片不存在' });
   res.setHeader('Cache-Control', 'private, max-age=86400');
-  res.sendFile(path.join(assetsDir(room.id), `${asset.id}.jpg`));
+  res.sendFile(file);
 });
 
 // ---------------- 模板与预设 ----------------
@@ -546,6 +550,16 @@ app.post(
     room.title = String(room.title || '导入的房间');
     room.createdAt = room.createdAt || Date.now();
     room.updatedAt = Date.now();
+    // 备份里打包的手出物和地图图片：写进新房间的目录。旧备份没带图片时保留文字说明（守秘人仍然知道内容）
+    const images = (req.body?.assets ?? input.assets) as Record<string, unknown> | undefined;
+    for (const a of room.trpg?.assets ?? []) {
+      const data = images?.[a.id];
+      if (typeof data !== 'string' || !/^[a-z0-9]+$/i.test(a.id)) continue;
+      const buf = Buffer.from(data.replace(/^data:image\/[a-z]+;base64,/, ''), 'base64');
+      if (buf.length < 100 || buf.length > 30 * 1024 * 1024) continue;
+      fs.mkdirSync(assetsDir(room.id), { recursive: true });
+      fs.writeFileSync(path.join(assetsDir(room.id), `${a.id}.jpg`), buf);
+    }
     store.addRoom(room);
     return room;
   }),

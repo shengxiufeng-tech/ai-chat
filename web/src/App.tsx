@@ -100,7 +100,7 @@ export default function App() {
       toast('这个文件不是有效的 JSON', 'error');
       return;
     }
-    const room = await attempt(() => post<Room>('/rooms/import', { room: data?.room ?? data }));
+    const room = await attempt(() => post<Room>('/rooms/import', { room: data?.room ?? data, assets: data?.assets }));
     if (room) {
       toast(`已导入「${room.title}」`);
       await loadRooms();
