@@ -19,6 +19,8 @@ const newJobId = () => `imp${Date.now().toString(36)}${Math.random().toString(36
 
 export class ImportManager {
   private jobs = new Map<string, Job>();
+  /** 整理完成后调用（加入剧本库），返回剧本库条目 id */
+  onDone?: (info: { progress: ImportProgress; ws: Workspace; result: PreparedScript }) => string | undefined;
 
   constructor(private root: string) {
     fs.mkdirSync(root, { recursive: true });
@@ -43,7 +45,7 @@ export class ImportManager {
     }
   }
 
-  create(fileName: string, pageCount: number): ImportProgress {
+  create(fileName: string, pageCount: number, fileHash?: string): ImportProgress {
     if (!(pageCount >= 1 && pageCount <= 600)) throw new Error('页数不对（最多 600 页）');
     const id = newJobId();
     const dir = this.dirOf(id);
@@ -60,6 +62,7 @@ export class ImportManager {
       activity: [],
       checklist: { categorized: 0, imagePages: 0, imagePagesSeen: 0, title: false, era: false, intro: false, brief: false, glossary: false, handouts: 0, maps: 0, pregens: 0 },
       usage: { input: 0, output: 0, cached: 0 },
+      ...(fileHash ? { fileHash } : {}),
     };
     const ws: Workspace = {
       dir,
@@ -168,7 +171,14 @@ export class ImportManager {
     })
       .then(() => {
         this.refreshChecklist(job);
-        Object.assign(job.progress, { status: 'done', finishedAt: Date.now(), fallback: job.ws.fallback, result: this.result(job) });
+        const result = this.result(job);
+        try {
+          const libraryId = this.onDone?.({ progress: job.progress, ws: job.ws, result });
+          if (libraryId) result.libraryId = libraryId;
+        } catch (err) {
+          console.warn('加入剧本库失败：', err);
+        }
+        Object.assign(job.progress, { status: 'done', finishedAt: Date.now(), fallback: job.ws.fallback, result });
         this.activity(job, '整理完成');
       })
       .catch((err) => {

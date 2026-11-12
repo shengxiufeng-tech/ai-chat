@@ -232,6 +232,37 @@ export interface PreparedScript {
   excluded?: PageCategory[];
   /** 整理用的模型 */
   organizer?: string;
+  /** 剧本库里的条目（创建房间时从剧本库拷贝图片） */
+  libraryId?: string;
+  /** 之前整理过同一个文件，直接用了上次的结果 */
+  reused?: boolean;
+}
+
+// ---------------- 剧本库 ----------------
+
+export type ScriptSourceKind = 'pdf' | 'file' | 'paste' | 'backup' | 'room';
+export const SCRIPT_SOURCE_LABELS: Record<ScriptSourceKind, string> = {
+  pdf: 'PDF',
+  file: '文件',
+  paste: '粘贴的文字',
+  backup: '房间备份',
+  room: '已有的房间',
+};
+
+/** 剧本库列表里的一项（只有不剧透的信息） */
+export interface LibraryItem {
+  id: string;
+  title: string;
+  eraLabel: string;
+  source: { kind: ScriptSourceKind; fileName?: string; pages?: number };
+  createdAt: number;
+  updatedAt: number;
+  handouts: number;
+  maps: number;
+  pregens: number;
+  organizer?: string;
+  /** 整理时有问题（比如缺了速览） */
+  warning?: boolean;
 }
 
 // ---------------- PDF 剧本导入 ----------------
@@ -299,6 +330,8 @@ export interface ImportProgress {
     pregens: number;
   };
   usage: { input: number; output: number; cached: number };
+  /** 文件指纹（同一个文件再次导入时直接用剧本库里的结果） */
+  fileHash?: string;
   /** 模型不支持工具调用，改用固定流程 */
   fallback?: boolean;
   error?: string;

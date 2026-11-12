@@ -1,15 +1,18 @@
-import { Eye, EyeOff, FileText, FileUp, Loader2, Play, ShieldCheck, Sparkles, TriangleAlert } from 'lucide-react';
+import { BookOpen, Eye, EyeOff, FileText, FileUp, History, Loader2, Play, RefreshCw, ShieldCheck, Sparkles, Trash2, TriangleAlert } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { PDFDocumentProxy } from 'pdfjs-dist';
 import {
   ASSET_KIND_LABELS,
   DEFAULT_EXCLUDED,
   PAGE_CATEGORY_LABELS,
+  SCRIPT_SOURCE_LABELS,
   type ImportProgress,
+  type LibraryItem,
   type PageCategory,
   type PreparedScript,
 } from '../../../shared/types';
-import { get, post } from '../api';
+import { del, get, post } from '../api';
+import { fileHash, textHash } from '../hash';
 import { askConfirm } from '../confirm';
 import { blobToDataUrl, openPdf, readPdfPage } from '../pdf';
 import { attempt, toast } from '../toast';
@@ -55,7 +58,7 @@ function pagesByCategory(pages: { page: number; category: PageCategory }[]) {
 }
 
 type PdfState =
-  | { phase: 'ready'; file: File; doc: PDFDocumentProxy }
+  | { phase: 'ready'; file: File; doc: PDFDocumentProxy; hash: string }
   | { phase: 'reading'; file: File; local: LocalPhase }
   | { phase: 'running'; fileName: string; id: string; progress: ImportProgress | null }
   | { phase: 'failed'; fileName: string; message: string };
@@ -90,6 +93,17 @@ export function ScriptImport({
   const [organizer, setOrganizer] = useState(model);
   const [organizerEffort, setOrganizerEffort] = useState('');
   const cancelRead = useRef(false);
+  // 剧本库：之前整理过的剧本
+  const [library, setLibrary] = useState<LibraryItem[]>([]);
+  const [showAllLibrary, setShowAllLibrary] = useState(false);
+  // 直接用了上次结果时，记下怎么重新整理
+  const [reuse, setReuse] = useState<{ kind: 'pdf'; file: File; hash: string } | { kind: 'file'; body: Record<string, unknown> } | null>(null);
+  const loadLibrary = useCallback(() => {
+    void get<LibraryItem[]>('/library')
+      .then(setLibrary)
+      .catch(() => {});
+  }, []);
+  useEffect(loadLibrary, [loadLibrary, prepared?.libraryId]);
 
   useEffect(() => {
     if (!organizer && model) setOrganizer(model);
@@ -98,9 +112,56 @@ export function ScriptImport({
   const prepare = async (body: Record<string, unknown>) => {
     setBusy(true);
     setShowSecret(false);
+    setReuse(null);
     const r = await attempt(() => post<PreparedScript>('/scripts/prepare', { ...body, model }));
     setBusy(false);
-    if (r) onPrepared(r);
+    if (r) {
+      onPrepared(r);
+      if (r.reused) setReuse({ kind: 'file', body });
+    }
+  };
+
+  /** 选用剧本库里的剧本 */
+  const pickLibrary = async (id: string) => {
+    const r = await attempt(() => get<PreparedScript>(`/library/${id}`));
+    if (!r) return;
+    setPdf(null);
+    setReuse(null);
+    setShowSecret(false);
+    setFileName('');
+    clearPdfImport();
+    onPrepared(r);
+  };
+
+  const removeLibrary = async (item: LibraryItem) => {
+    const ok = await askConfirm({
+      title: '从剧本库删除',
+      message: `从剧本库删除「${item.title}」？已经用它创建的房间不受影响；以后再导入同一个文件需要重新整理。`,
+      confirmText: '删除',
+      danger: true,
+    });
+    if (!ok) return;
+    if (await attempt(() => del(`/library/${item.id}`))) {
+      if (prepared?.libraryId === item.id) onPrepared(null);
+      loadLibrary();
+    }
+  };
+
+  /** 不用上次的结果，重新整理 */
+  const redo = async () => {
+    if (!reuse) return;
+    const r = reuse;
+    setReuse(null);
+    onPrepared(null);
+    if (r.kind === 'file') {
+      await prepare({ ...r.body, force: true });
+      return;
+    }
+    try {
+      setPdf({ phase: 'ready', file: r.file, doc: await openPdf(r.file), hash: r.hash });
+    } catch (err) {
+      setPdf({ phase: 'failed', fileName: r.file.name, message: errText(err) });
+    }
   };
 
   // ---- PDF：轮询整理进度 ----
@@ -164,7 +225,7 @@ export function ScriptImport({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const startPdf = async (file: File, doc: PDFDocumentProxy) => {
+  const startPdf = async (file: File, doc: PDFDocumentProxy, hash: string) => {
     if (!organizer.trim()) {
       toast('请先选择整理用的模型', 'error');
       return;
@@ -173,7 +234,7 @@ export function ScriptImport({
     const total = doc.numPages;
     setPdf({ phase: 'reading', file, local: { phase: 'reading', done: 0, total } });
     try {
-      const job = await post<ImportProgress>('/imports', { fileName: file.name, pageCount: total });
+      const job = await post<ImportProgress>('/imports', { fileName: file.name, pageCount: total, hash });
       for (let n = 1; n <= total; n++) {
         if (cancelRead.current) {
           await post(`/imports/${job.id}/cancel`).catch(() => {});
@@ -218,28 +279,42 @@ export function ScriptImport({
     }
     setFileName(file.name);
     onPrepared(null);
+    setReuse(null);
     clearPdfImport();
+    const hash = await fileHash(file);
     if (isPdf) {
+      // 同一个文件之前整理过：直接用剧本库里的结果
+      const hit = (await get<LibraryItem[]>(`/library?hash=${encodeURIComponent(hash)}`).catch(() => []))[0];
+      if (hit) {
+        const r = await attempt(() => get<PreparedScript>(`/library/${hit.id}`));
+        if (r) {
+          setPdf(null);
+          onPrepared({ ...r, reused: true });
+          setReuse({ kind: 'pdf', file, hash });
+          return;
+        }
+      }
       try {
         const doc = await openPdf(file);
-        setPdf({ phase: 'ready', file, doc });
+        setPdf({ phase: 'ready', file, doc, hash });
       } catch (err) {
         setPdf({ phase: 'failed', fileName: file.name, message: errText(err) });
       }
       return;
     }
     setPdf(null);
-    await prepare({ name: file.name, data: await readAsBase64(file) });
+    await prepare({ name: file.name, data: await readAsBase64(file), hash });
   };
 
   const set = <K extends keyof PreparedScript>(k: K, v: PreparedScript[K]) => prepared && onPrepared({ ...prepared, [k]: v });
 
   // 调整哪些页面交给守秘人
   const toggleCategory = async (c: PageCategory) => {
-    if (!prepared?.importId) return;
+    if (!prepared?.libraryId && !prepared?.importId) return;
     const excluded = prepared.excluded ?? DEFAULT_EXCLUDED;
     const next = excluded.includes(c) ? excluded.filter((x) => x !== c) : [...excluded, c];
-    const r = await attempt(() => post<PreparedScript>(`/imports/${prepared.importId}/assemble`, { excluded: next }));
+    const url = prepared.libraryId ? `/library/${prepared.libraryId}/assemble` : `/imports/${prepared.importId}/assemble`;
+    const r = await attempt(() => post<PreparedScript>(url, { excluded: next }));
     // 保留你改过的标题、时代和简介
     if (r) onPrepared({ ...r, title: prepared.title, eraLabel: prepared.eraLabel, intro: prepared.intro });
   };
@@ -254,6 +329,54 @@ export function ScriptImport({
           不用打开剧本文件：导入后 AI 会把内容分成「你可以看的」（标题、时代、开场简介、开团须知）和「只有守秘人能看的」两部分，后者默认隐藏。
         </span>
       </div>
+
+      {library.length > 0 && !working && (
+        <Field label="剧本库" hint="（之前整理过的剧本，点「使用」直接用，不用重新整理）">
+          <div className="library-list">
+            {(showAllLibrary ? library : library.slice(0, 4)).map((item) => {
+              const active = prepared?.libraryId === item.id;
+              const extras = [
+                item.handouts ? `手出物 ${item.handouts}` : '',
+                item.maps ? `地图 ${item.maps}` : '',
+                item.pregens ? `预设调查员 ${item.pregens}` : '',
+              ].filter(Boolean);
+              return (
+                <div key={item.id} className={`library-item ${active ? 'active' : ''}`}>
+                  <BookOpen className="library-icon" />
+                  <div className="grow" style={{ minWidth: 0 }}>
+                    <div className="library-title">{item.title}</div>
+                    <div className="hint library-meta">
+                      {[
+                        item.eraLabel,
+                        `${SCRIPT_SOURCE_LABELS[item.source.kind]}${item.source.pages ? ` ${item.source.pages} 页` : ''}`,
+                        ...extras,
+                        new Date(item.updatedAt).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' }),
+                      ]
+                        .filter(Boolean)
+                        .join(' · ')}
+                    </div>
+                  </div>
+                  {active ? (
+                    <span className="badge badge-accent">正在使用</span>
+                  ) : (
+                    <button className="btn btn-sm" onClick={() => void pickLibrary(item.id)}>
+                      使用
+                    </button>
+                  )}
+                  <button className="icon-btn sm" title="从剧本库删除" aria-label="从剧本库删除" onClick={() => void removeLibrary(item)}>
+                    <Trash2 />
+                  </button>
+                </div>
+              );
+            })}
+            {library.length > 4 && (
+              <button className="btn btn-sm btn-ghost" onClick={() => setShowAllLibrary((x) => !x)}>
+                {showAllLibrary ? '收起' : `显示全部（${library.length}）`}
+              </button>
+            )}
+          </div>
+        </Field>
+      )}
 
       <div className="row wrap">
         <button className="btn" onClick={() => fileRef.current?.click()} disabled={working}>
@@ -302,7 +425,7 @@ export function ScriptImport({
           </div>
           <div className="row">
             <span className="spacer" />
-            <button className="btn btn-primary" onClick={() => void startPdf(pdf.file, pdf.doc)} disabled={!organizer.trim()}>
+            <button className="btn btn-primary" onClick={() => void startPdf(pdf.file, pdf.doc, pdf.hash)} disabled={!organizer.trim()}>
               <Play /> 开始整理
             </button>
           </div>
@@ -326,7 +449,7 @@ export function ScriptImport({
         <Field label="粘贴剧本" hint="（粘贴的内容你已经看过了，整理一下可以得到开场简介和守秘人速览）">
           <textarea rows={6} value={pasted} onChange={(e) => onPasted(e.target.value)} placeholder="把剧本、大纲或者你的构想粘贴到这里…" />
           <div className="row">
-            <button className="btn btn-sm" disabled={working || !pasted.trim()} onClick={() => prepare({ text: pasted })}>
+            <button className="btn btn-sm" disabled={working || !pasted.trim()} onClick={() => prepare({ text: pasted, hash: textHash(pasted) })}>
               <Sparkles /> 整理
             </button>
             <span className="hint">不整理也可以直接创建，这时需要自己填时代背景。</span>
@@ -343,6 +466,15 @@ export function ScriptImport({
 
       {prepared && !working && (
         <div className="prepared-card">
+          {prepared.reused && reuse && (
+            <div className="callout callout-info">
+              <History />
+              <span className="grow">这个文件之前整理过，已经直接用了剧本库里上次的结果。</span>
+              <button className="btn btn-sm" onClick={() => void redo()}>
+                <RefreshCw /> 重新整理
+              </button>
+            </div>
+          )}
           <div className="form-grid">
             <Field label="标题">
               <input value={prepared.title} onChange={(e) => set('title', e.target.value)} />
@@ -394,7 +526,7 @@ export function ScriptImport({
           ) : null}
 
           <div className="hint">
-            {prepared.importId
+            {prepared.pages
               ? `交给守秘人的原文约 ${prepared.chars.toLocaleString('en-US')} 字，另外还有整理助手写的速览${prepared.assets?.some((a) => a.kind === 'map') ? '和地图图片' : ''}。`
               : `已导入原文 ${prepared.chars.toLocaleString('en-US')} 字${prepared.truncated ? '（太长了，只保留了前面的部分）' : ''}，文件里的图片不会导入。守秘人会拿到 AI 整理的速览和完整原文。`}
           </div>

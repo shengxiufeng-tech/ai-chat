@@ -94,7 +94,7 @@ export function NewRoomModal({
     setCreating(false);
     if (room) {
       // PDF 剧本的整理结果已经用掉了，下次打开窗口不再显示
-      if (mode === 'trpg' && t.prepared?.importId) clearPdfImport();
+      if (mode === 'trpg' && (t.prepared?.importId || t.prepared?.libraryId)) clearPdfImport();
       onCreated(room);
     }
   };

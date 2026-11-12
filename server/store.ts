@@ -160,6 +160,11 @@ export class Store {
     return out.sort((a, b) => b.updatedAt - a.updatedAt);
   }
 
+  /** 所有房间（完整数据） */
+  allRooms(): Room[] {
+    return [...this.rooms.values()];
+  }
+
   getRoom(id: string): Room | undefined {
     return this.rooms.get(id);
   }

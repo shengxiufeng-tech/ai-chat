@@ -102,7 +102,7 @@ export default function App() {
     }
     const room = await attempt(() => post<Room>('/rooms/import', { room: data?.room ?? data, assets: data?.assets }));
     if (room) {
-      toast(`已导入「${room.title}」`);
+      toast(room.mode === 'trpg' && room.trpg?.scenarioId === 'custom' ? `已导入「${room.title}」，剧本也加入了剧本库` : `已导入「${room.title}」`);
       await loadRooms();
       setSelected(room.id);
     }

@@ -1588,6 +1588,51 @@ mark {
   font-variant-numeric: tabular-nums;
 }
 
+/* 剧本库 */
+.library-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.library-item {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  background: var(--surface-1);
+}
+
+.library-item.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.library-icon {
+  width: 18px;
+  height: 18px;
+  flex: none;
+  color: var(--accent-text);
+}
+
+.library-title {
+  font-weight: 600;
+  font-size: 13.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.library-meta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* 手出物 / 地图 */
 .handout-card {
   margin: 0;
@@ -3248,6 +3293,8 @@ mark {
 }
 
 .modal {
+  /* 网格里的弹窗默认会被内容撑宽（比如很长的一行文字），min-width: 0 让它守住自己的宽度 */
+  min-width: 0;
   background: var(--surface-1);
   border: 1px solid var(--border-strong);
   border-radius: 18px;

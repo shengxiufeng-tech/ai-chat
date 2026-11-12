@@ -16,6 +16,7 @@ import type {
 import { DEFAULT_ROOM_SETTINGS } from '../shared/types.ts';
 import { AccessControl, lanAddresses } from './access.ts';
 import { ImportManager } from './imports.ts';
+import { preparedFromTrpg, ScriptLibrary } from './library.ts';
 import { estimateTokens } from './context.ts';
 import { completeChat, completeChatWithUsage, listModels, primeModelCache, type ChatMessage } from './llm.ts';
 import { BUILTIN_TEMPLATES, ROOM_PRESETS } from './presets.ts';
@@ -43,6 +44,19 @@ const store = new Store(DATA_DIR);
 // PDF 剧本的导入任务；房间里的手出物和地图放在 assets/<房间 id>/ 下
 const imports = new ImportManager(path.join(DATA_DIR, 'imports'));
 const assetsDir = (roomId: string) => path.join(DATA_DIR, 'assets', roomId);
+// 剧本库：整理过的剧本，以后可以直接选用
+const library = new ScriptLibrary(path.join(DATA_DIR, 'scripts'));
+imports.onDone = ({ progress, ws, result }) =>
+  library.add({
+    prepared: result,
+    source: { kind: 'pdf', fileName: progress.fileName, pages: progress.pageCount, hash: progress.fileHash },
+    ws,
+    images: Object.fromEntries(ws.assets.map((a) => [a.id, a.file])),
+  });
+{
+  const n = library.backfillOnce(store.allRooms(), (roomId, assetId) => store.assetPath(roomId, assetId));
+  if (n) console.log(`  已把 ${n} 个已有房间的剧本加入剧本库`);
+}
 const runners = new RunnerManager(store);
 const app = express();
 // 导入房间备份可能带着手出物和地图图片，单独放宽大小限制
@@ -250,13 +264,21 @@ app.post(
       }
     }
     if (!text.trim()) throw new HttpError(400, '没有读到剧本内容（文件是空的，或者内容都是图片）');
+    // 同一个文件（或同样的文字）之前整理过：直接用剧本库里的结果
+    const hash = typeof b.hash === 'string' && b.hash ? b.hash : undefined;
+    const known = library.findByHash(hash);
+    if (known && !b.force) return { ...library.get(known), reused: true };
     const s = store.getSettings();
-    return prepareScript(text, {
+    const result = await prepareScript(text, {
       baseUrl: s.baseUrl,
       apiKey: s.apiKey,
       model: String(b.model || s.defaultModel || ''),
       fileName: name || undefined,
     });
+    // 整理失败（直接用原文）的不存，下次还会重新整理
+    if (result.warning) return result;
+    const libraryId = library.add({ prepared: result, source: { kind: b.data ? 'file' : 'paste', fileName: name || undefined, hash } });
+    return { ...result, libraryId };
   }),
 );
 
@@ -266,7 +288,7 @@ app.post(
   '/api/imports',
   h((req) => {
     const b = req.body ?? {};
-    return imports.create(String(b.fileName ?? ''), Math.floor(Number(b.pageCount)));
+    return imports.create(String(b.fileName ?? ''), Math.floor(Number(b.pageCount)), typeof b.hash === 'string' ? b.hash : undefined);
   }),
 );
 
@@ -307,6 +329,35 @@ app.post(
 app.post(
   '/api/imports/:id/assemble',
   h((req) => imports.assemble(param(req, 'id'), req.body?.excluded)),
+);
+
+// ---------------- 剧本库 ----------------
+
+app.get(
+  '/api/library',
+  h((req) => {
+    const hash = typeof req.query.hash === 'string' ? req.query.hash : '';
+    if (hash) {
+      const id = library.findByHash(hash);
+      return id ? library.list().filter((x) => x.id === id) : [];
+    }
+    return library.list();
+  }),
+);
+
+app.get(
+  '/api/library/:id',
+  h((req) => library.get(param(req, 'id'))),
+);
+
+app.delete(
+  '/api/library/:id',
+  h((req) => library.remove(param(req, 'id'))),
+);
+
+app.post(
+  '/api/library/:id/assemble',
+  h((req) => library.assemble(param(req, 'id'), req.body?.excluded)),
 );
 
 // 浏览器读 PDF 用的字符映射和标准字体（中文 PDF 常用的 CID 字体需要它们才能取出文字）
@@ -447,10 +498,12 @@ function createTrpgRoom(o: TrpgCreateOptions): Room {
     memo: o.memo ?? true,
     memos: [],
   };
-  // PDF 剧本：把整理助手裁下来的手出物和地图拷贝到房间目录
-  if (o.scenarioId === 'custom' && p?.importId) {
+  // PDF 剧本：把手出物和地图拷贝到房间目录（剧本库优先，旧的导入任务也支持）
+  if (o.scenarioId === 'custom' && (p?.libraryId || p?.importId)) {
     try {
-      const { assets, pregens } = imports.takeAssets(String(p.importId), assetsDir(room.id));
+      const { assets, pregens } = p.libraryId
+        ? library.takeAssets(String(p.libraryId), assetsDir(room.id))
+        : imports.takeAssets(String(p.importId), assetsDir(room.id));
       if (assets.length) trpg.assets = assets;
       if (pregens?.length) trpg.pregens = pregens;
       trpg.mapsToKp = true;
@@ -559,6 +612,15 @@ app.post(
       if (buf.length < 100 || buf.length > 30 * 1024 * 1024) continue;
       fs.mkdirSync(assetsDir(room.id), { recursive: true });
       fs.writeFileSync(path.join(assetsDir(room.id), `${a.id}.jpg`), buf);
+    }
+    // 房间用的是导入的剧本：顺便加入剧本库
+    if (room.mode === 'trpg' && room.trpg?.scenarioId === 'custom' && room.trpg.scenarioSecret?.trim()) {
+      try {
+        const images = Object.fromEntries((room.trpg.assets ?? []).map((a) => [a.id, path.join(assetsDir(room.id), `${a.id}.jpg`)]));
+        library.add({ prepared: preparedFromTrpg(room.trpg), source: { kind: 'backup', fileName: room.title }, images });
+      } catch (err) {
+        console.warn('加入剧本库失败：', err);
+      }
     }
     store.addRoom(room);
     return room;
