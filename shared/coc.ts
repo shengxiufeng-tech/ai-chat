@@ -1,6 +1,8 @@
 // 《克苏鲁的呼唤》第七版（COC 7th）规则引擎：骰子、检定、车卡、角色卡
 // 这里实现的是规则机制本身（d100 检定、成功等级等），职业和技能列表是为新手简化过的版本。
 
+import type { ScriptAsset } from './types.ts';
+
 // ---------------- 类型 ----------------
 
 export type CharKey = 'STR' | 'CON' | 'SIZ' | 'DEX' | 'APP' | 'INT' | 'POW' | 'EDU';
@@ -71,6 +73,12 @@ export interface TrpgState {
   /** 秘密备忘：守秘人自己定下的秘密设定，只有守秘人能看到 */
   memo: boolean;
   memos: MemoEntry[];
+  /** PDF 剧本里的手出物和地图（图片在数据目录的 assets/<房间 id>/ 下） */
+  assets?: ScriptAsset[];
+  /** 剧本自带的预设调查员 */
+  pregens?: InvestigatorSheet[];
+  /** 把地图图片附给守秘人（守秘人的模型要能看图），默认开启 */
+  mapsToKp?: boolean;
 }
 
 /** 秘密备忘的一条（主题 + 内容），玩家、AI 队友和规则助手都看不到 */
@@ -804,7 +812,7 @@ export function resolveTarget(sheet: InvestigatorSheet, rawName: string): { name
 
 /** 守秘人指令的正则：[检定:侦查]、【理智：1/1d6】等 */
 export const COMMAND_RE =
-  /[[【]\s*(检定|理智|掷骰|HP|MP|SAN|幸运|物品|NPC|线索|备忘|成长)\s*(?:[:：]\s*([^\]】\n]{1,240}))?[\]】]/gi;
+  /[[【]\s*(检定|理智|掷骰|HP|MP|SAN|幸运|物品|NPC|线索|备忘|成长|展示)\s*(?:[:：]\s*([^\]】\n]{1,240}))?[\]】]/gi;
 
 /** 把指令换成看得懂的文字，例如 [理智:0/1] → 「理智 0/1」（规则小贴士里引用指令时用） */
 export function readableCommands(text: string) {

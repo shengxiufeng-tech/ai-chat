@@ -25,7 +25,7 @@ import {
   stripCommands,
   successLevel,
 } from '../shared/coc.ts';
-import type { Message, Participant, Room } from '../shared/types.ts';
+import { ASSET_KIND_LABELS, type Message, type Participant, type Room, type ScriptAsset } from '../shared/types.ts';
 import type { ChatMessage } from './llm.ts';
 import { turnBuilder, usableHistory } from './prompt.ts';
 import { newId } from './store.ts';
@@ -143,6 +143,29 @@ function investigatorNames(room: Room) {
     .join('、');
 }
 
+/** 剧本里的手出物和地图（给守秘人看的说明） */
+function assetSection(room: Room) {
+  const trpg = room.trpg!;
+  const assets = trpg.assets ?? [];
+  if (!assets.length) return '';
+  const maps = assets.filter((a) => a.kind === 'map');
+  const lines = assets.map(
+    (a) => `- ${ASSET_KIND_LABELS[a.kind]}「${a.title}」（${a.visibility === 'player' ? '可以展示给玩家' : '守秘人专用，不能展示'}）：${a.description || '（没有说明）'}`,
+  );
+  return `\n【剧本里的手出物和地图】
+下面这些图片来自剧本，玩家现在都看不到。剧情里调查员拿到手出物、或者需要给玩家看可以公开的地图时，在消息里写 [展示:名称]（名称就是下面「」里的），程序会把图片展示给玩家；展示以后不用把上面的文字全文复述，描写调查员拿到它时的情形就行。守秘人专用的不能展示。${
+    maps.length && trpg.mapsToKp !== false ? '地图的图片附在对话开头的第一条消息里，描述方位和路线时对照地图。' : ''
+  }
+${lines.join('\n')}`;
+}
+
+/** 找守秘人要展示的图片：先按完整名称，再按包含关系 */
+export function findAsset(assets: ScriptAsset[] | undefined, name: string) {
+  const n = name.trim().replace(/^[「『《"“]|[」』》"”]$/g, '');
+  if (!n || !assets?.length) return undefined;
+  return assets.find((a) => a.title === n) ?? assets.find((a) => a.title.includes(n) || n.includes(a.title));
+}
+
 export function buildKpSystemPrompt(room: Room, kp: Participant) {
   const trpg = room.trpg!;
   const others = investigatorNames(room);
@@ -153,6 +176,7 @@ export function buildKpSystemPrompt(room: Room, kp: Participant) {
     `\n【玩家】\n${rosterNames(room)}`,
     `每一轮最后一条消息的末尾会附上【当前状态】：调查员最新的数值、技能和物品${trpg.notebook ? '，守秘人笔记' : ''}${trpg.memo ? '，以及你的秘密备忘' : ''}。以那里的内容为准。`,
     `\n${trpg.scenarioSecret}`,
+    assetSection(room),
     `\n【主持原则】
 - 用第二人称（"你"）生动地描述场景和 NPC 的言行，一般 150~300 字，结尾把选择交还给玩家（比如"你打算怎么做？"）。
 - 你的回复只代表守秘人：描述环境、扮演 NPC、裁定结果。${others ? `玩家和 AI 队友（${others}）都会自己发言：` : '玩家会自己发言：'}不要替他们说台词、替他们思考或决定行动，也不要用「【名字】：」的格式写任何人的发言。你可以描述外界对他们的影响（比如冷风让人打了个寒颤），以及他们已经说出的行动带来的结果。
@@ -205,6 +229,8 @@ export function buildKpMessages(room: Room, kp: Participant, history: Message[])
       );
     } else if (m.kind === 'roll') {
       push('user', `【骰子】：${m.content.trim()}`);
+    } else if (m.kind === 'handout') {
+      push('user', `【展示】${m.content.trim()}`);
     }
     // 笔记提示（kind === 'note'）只给界面看，笔记本身在【当前状态】里
   }
@@ -259,6 +285,7 @@ export function buildTeammateMessages(room: Room, self: Participant, history: Me
     else if (m.role === 'ai') push('user', `【${m.speakerName}】：${m.content.trim()}`);
     else if (m.role === 'human' && !m.ooc) push('user', `【${playerName(room)}（玩家）】：${m.content.trim()}`);
     else if (m.kind === 'roll') push('user', `【骰子】：${m.content.trim()}`);
+    else if (m.kind === 'handout') push('user', `【展示】${handoutText(room, m)}`);
   }
   if (turns.length === 0 || turns[0].role === 'assistant') turns.unshift({ role: 'user', content: '（游戏开始）' });
   if (turns[turns.length - 1].role === 'assistant') turns.push({ role: 'user', content: '（请继续）' });
@@ -272,6 +299,12 @@ export function buildTeammateMessages(room: Room, self: Participant, history: Me
   return [{ role: 'system', content: system.join('\n') }, ...turns];
 }
 
+/** 展示过的手出物：调查员都看到了，队友和规则助手也知道内容 */
+function handoutText(room: Room, m: Message) {
+  const asset = room.trpg?.assets?.find((a) => a.id === m.asset?.id);
+  return asset?.description ? `${m.content.trim()}：${asset.description}` : m.content.trim();
+}
+
 /** 规则助手：能看到局势、角色卡和笔记（都是玩家可见的），但看不到剧本秘密 */
 export function buildAssistantMessages(room: Room, question: string, mode: 'ask' | 'suggest'): ChatMessage[] {
   const trpg = room.trpg!;
@@ -282,6 +315,7 @@ export function buildAssistantMessages(room: Room, question: string, mode: 'ask'
     .map((m) => {
       if (m.role === 'human') return `${m.ooc ? `玩家（场外）` : playerName(room)}：${m.content.trim()}`;
       if (m.kind === 'roll') return `【骰子】${m.content.trim()}`;
+      if (m.kind === 'handout') return `【展示】${handoutText(room, m)}`;
       if (m.participantId === kp?.id) return `守秘人：${stripCommands(m.content)}`;
       return `${m.speakerName}：${m.content.trim()}`;
     })
@@ -411,6 +445,8 @@ export interface ProcessResult {
   pendingHuman: number;
   sheetsChanged: boolean;
   problems: string[];
+  /** 守秘人展示给玩家的手出物 / 地图 */
+  shows: ScriptAsset[];
 }
 
 /** 解析守秘人消息里的指令，生成骰子记录（会直接修改角色卡） */
@@ -424,6 +460,7 @@ export function processKpCommands(room: Room, text: string, rng: Rng = Math.rand
     pendingHuman: 0,
     sheetsChanged: false,
     problems: [],
+    shows: [],
   };
   const seen = new Set<string>();
 
@@ -466,6 +503,16 @@ export function processKpCommands(room: Room, text: string, rng: Rng = Math.rand
       }
       const ev = upsertNote(trpg.notes, kind === 'NPC' ? 'npc' : 'clue', title, body);
       if (ev) result.notes.push(ev);
+      continue;
+    }
+
+    if (kind === '展示') {
+      const asset = findAsset(trpg.assets, args.join('：').replace(/^@/, ''));
+      // 找不到或者是守秘人专用的就不展示（提示里不写名字，免得剧透）
+      if (asset && asset.visibility === 'player') {
+        asset.shown = true;
+        result.shows.push(asset);
+      }
       continue;
     }
 

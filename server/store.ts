@@ -60,6 +60,11 @@ export class Store {
   private rooms = new Map<string, Room>();
   private saveTimers = new Map<string, NodeJS.Timeout>();
 
+  /** 房间里手出物 / 地图图片的路径 */
+  assetPath(roomId: string, assetId: string) {
+    return path.join(this.dataDir, 'assets', roomId, `${assetId}.jpg`);
+  }
+
   constructor(private dataDir: string) {
     this.roomsDir = path.join(dataDir, 'rooms');
     fs.mkdirSync(this.roomsDir, { recursive: true });

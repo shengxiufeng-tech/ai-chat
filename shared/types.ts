@@ -99,11 +99,13 @@ export interface Message {
   /** 跑团：玩家的场外发言 */
   ooc?: boolean;
   /** 跑团：系统消息的种类（骰子 / 笔记提示） */
-  kind?: 'roll' | 'note';
+  kind?: 'roll' | 'note' | 'handout';
   /** 跑团：骰子 / 数值变化记录 */
   roll?: RollRecord;
   /** 跑团：守秘人记下的笔记 */
   note?: NoteEvent;
+  /** 跑团：守秘人展示给玩家的手出物 / 地图 */
+  asset?: { id: string; title: string; kind: AssetKind };
   /** 生成这条消息时，因为上下文太长而没有发给模型的早期消息条数 */
   trimmed?: number;
   /** 模型替别人写的发言，已经从正文里去掉（保留在这里供查看） */
@@ -217,6 +219,90 @@ export interface PreparedScript {
   truncated?: boolean;
   /** 整理过程中的提示（比如整理失败、改用原文） */
   warning?: string;
+  // ---- PDF 剧本（整理助手生成）----
+  /** 对应的导入任务（创建房间时从这里拷贝图片） */
+  importId?: string;
+  /** 手出物和地图 */
+  assets?: ScriptAsset[];
+  /** 剧本自带的预设调查员 */
+  pregens?: InvestigatorSheet[];
+  /** 每一页的分类（预览里只显示页码和分类，不显示内容） */
+  pages?: { page: number; category: PageCategory }[];
+  /** 不交给守秘人的页面分类 */
+  excluded?: PageCategory[];
+  /** 整理用的模型 */
+  organizer?: string;
+}
+
+// ---------------- PDF 剧本导入 ----------------
+
+export type AssetKind = 'handout' | 'map' | 'image';
+export const ASSET_KIND_LABELS: Record<AssetKind, string> = { handout: '手出物', map: '地图', image: '图片' };
+
+/** 从剧本里裁下来的图片：手出物、地图等 */
+export interface ScriptAsset {
+  id: string;
+  kind: AssetKind;
+  title: string;
+  /** 给守秘人的说明：手出物的完整文字、地图的区域和标注、什么时候给玩家看 */
+  description: string;
+  /** 玩家能不能看（守秘人专用的地图不能展示给玩家） */
+  visibility: 'player' | 'keeper';
+  /** 来自第几页 */
+  page: number;
+  width: number;
+  height: number;
+  /** 守秘人已经展示给玩家了 */
+  shown?: boolean;
+}
+
+export type PageCategory = 'scenario' | 'handout' | 'map' | 'pregen' | 'rules' | 'art' | 'other';
+export const PAGE_CATEGORY_LABELS: Record<PageCategory, string> = {
+  scenario: '剧本正文',
+  handout: '手出物',
+  map: '地图',
+  pregen: '预设调查员',
+  rules: '规则介绍',
+  art: '插图',
+  other: '版权 / 广告 / 空白',
+};
+/** 默认不交给守秘人的页面 */
+export const DEFAULT_EXCLUDED: PageCategory[] = ['rules', 'art', 'other'];
+
+export type ImportStatus = 'uploading' | 'running' | 'done' | 'error' | 'cancelled';
+
+/** 整理进度（只有不剧透的信息） */
+export interface ImportProgress {
+  id: string;
+  fileName: string;
+  pageCount: number;
+  uploaded: number;
+  status: ImportStatus;
+  model: string;
+  step: number;
+  maxSteps: number;
+  startedAt?: number;
+  finishedAt?: number;
+  /** 最近的动作，例如「查看第 34 页」 */
+  activity: { at: number; text: string }[];
+  checklist: {
+    categorized: number;
+    imagePages: number;
+    imagePagesSeen: number;
+    title: boolean;
+    era: boolean;
+    intro: boolean;
+    brief: boolean;
+    glossary: boolean;
+    handouts: number;
+    maps: number;
+    pregens: number;
+  };
+  usage: { input: number; output: number; cached: number };
+  /** 模型不支持工具调用，改用固定流程 */
+  fallback?: boolean;
+  error?: string;
+  result?: PreparedScript;
 }
 
 /** 新建跑团房间的参数 */

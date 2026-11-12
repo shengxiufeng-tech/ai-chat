@@ -407,6 +407,7 @@ export function RoomView({
                     message={m}
                     isLast={i === room.messages.length - 1}
                     isKp={!!kpId && m.participantId === kpId}
+                  roomId={room.id}
                     playerName={trpg ? t?.sheets.player?.name : undefined}
                     onEdit={onEdit}
                     onDelete={onDelete}

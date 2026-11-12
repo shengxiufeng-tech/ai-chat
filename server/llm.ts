@@ -8,11 +8,24 @@ export interface ChatMessage {
   content: string;
 }
 
+/** 带图片的消息内容（OpenAI 的 content parts 格式） */
+export type ChatPart = { type: 'text'; text: string } | { type: 'image_url'; image_url: { url: string } };
+export interface RichUserMessage {
+  role: 'user';
+  content: ChatPart[];
+}
+/** 实际发给模型的消息：普通文字，或者带图片的用户消息 */
+export type WireMessage = ChatMessage | RichUserMessage;
+
+/** 消息里的文字（图片记作「[图片]」） */
+export const textOf = (content: string | ChatPart[] | null | undefined): string =>
+  content == null ? '' : typeof content === 'string' ? content : content.map((p) => (p.type === 'text' ? p.text : '[图片]')).join('\n');
+
 export interface ChatOptions {
   baseUrl: string;
   apiKey: string;
   model: string;
-  messages: ChatMessage[];
+  messages: WireMessage[];
   temperature?: number;
   maxTokens?: number;
   /** 思考强度，作为 reasoning_effort 发送；空则不发送 */
@@ -351,6 +364,160 @@ export async function completeChatWithUsage(opts: ChatOptions): Promise<{ text: 
   return { text, usage };
 }
 
+// ---------------- 工具调用（整理剧本的 agent 用） ----------------
+
+export interface ToolDef {
+  type: 'function';
+  function: { name: string; description: string; parameters: Record<string, unknown> };
+}
+
+export interface ToolCall {
+  id: string;
+  name: string;
+  /** JSON 字符串 */
+  arguments: string;
+}
+
+export type AgentMessage =
+  | { role: 'system'; content: string }
+  | { role: 'user'; content: string | ChatPart[] }
+  | { role: 'assistant'; content: string | null; tool_calls?: unknown[]; [key: string]: unknown }
+  | { role: 'tool'; tool_call_id: string; content: string };
+
+export interface AgentReply {
+  content: string;
+  toolCalls: ToolCall[];
+  usage?: TokenUsage;
+  finish?: string;
+  /** 原样放回对话记录的助手消息（保留服务商附带的字段，比如 Gemini 的思考签名） */
+  message: AgentMessage;
+}
+
+/** 这个模型（或服务）不支持工具调用 */
+export class ToolsUnsupportedError extends Error {}
+
+export interface ToolChatOptions {
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+  messages: AgentMessage[];
+  tools: ToolDef[];
+  reasoningEffort?: string;
+  sessionId?: string;
+  signal?: AbortSignal;
+  /** 单次请求最多等多久，默认 5 分钟 */
+  timeoutMs?: number;
+}
+
+let toolCallSeq = 0;
+
+/** 带工具的一次（非流式）调用 */
+export async function chatWithTools(opts: ToolChatOptions): Promise<AgentReply> {
+  if (isMock(opts.baseUrl)) return mockAgentReply(opts);
+  const body: Record<string, unknown> = {
+    model: opts.model,
+    messages: opts.messages,
+    tools: opts.tools,
+    tool_choice: 'auto',
+    stream: false,
+  };
+  if (opts.reasoningEffort) body.reasoning_effort = opts.reasoningEffort;
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    Authorization: `Bearer ${opts.apiKey || 'magpie-ai-chat'}`,
+    'User-Agent': USER_AGENT,
+  };
+  if (opts.sessionId) headers['X-Magpie-Session'] = opts.sessionId;
+  const timeout = AbortSignal.timeout(opts.timeoutMs ?? 300_000);
+  const signal = opts.signal ? AbortSignal.any([opts.signal, timeout]) : timeout;
+  let res: Response;
+  try {
+    res = await fetch(endpoint(opts.baseUrl, '/chat/completions'), { method: 'POST', headers, body: JSON.stringify(body), signal });
+  } catch (err) {
+    if (timeout.aborted && !opts.signal?.aborted) throw new Error(`模型超过 ${Math.round((opts.timeoutMs ?? 300_000) / 1000)} 秒没有回应`);
+    throw describeFetchError(err, opts.baseUrl);
+  }
+  if (!res.ok) {
+    const err = await readError(res);
+    if (res.status === 400 && /tool|function/i.test(err.message)) throw new ToolsUnsupportedError(err.message);
+    throw err;
+  }
+  const json: any = await res.json();
+  const msg = json?.choices?.[0]?.message ?? {};
+  const rawCalls: any[] = Array.isArray(msg.tool_calls) ? msg.tool_calls : [];
+  // 有的服务不给 id，或者把参数直接给成对象：补齐，同时原样保留其它字段
+  const fixed = rawCalls.map((c) => {
+    const fn = c?.function ?? {};
+    const args = typeof fn.arguments === 'string' ? fn.arguments : JSON.stringify(fn.arguments ?? {});
+    return { ...c, id: c?.id || `call_${Date.now().toString(36)}_${toolCallSeq++}`, type: c?.type ?? 'function', function: { ...fn, arguments: args } };
+  });
+  const content = typeof msg.content === 'string' ? msg.content : textOf(msg.content);
+  const message: AgentMessage = { ...msg, role: 'assistant', content: content || null, ...(fixed.length ? { tool_calls: fixed } : {}) };
+  if (!fixed.length) delete (message as { tool_calls?: unknown }).tool_calls;
+  return {
+    content,
+    toolCalls: fixed.map((c) => ({ id: c.id, name: String(c.function?.name ?? ''), arguments: c.function.arguments })),
+    usage: parseUsage(json?.usage),
+    finish: json?.choices?.[0]?.finish_reason,
+    message,
+  };
+}
+
+/** 模拟的整理助手：按固定顺序调用工具（测试和体验界面用） */
+async function mockAgentReply(opts: ToolChatOptions): Promise<AgentReply> {
+  if (opts.model === 'mock/notools') throw new ToolsUnsupportedError('模拟：这个模型不支持工具调用');
+  await sleep(250, opts.signal);
+  const first = textOf(opts.messages.find((m) => m.role === 'user')?.content as string | ChatPart[]);
+  const pages = [...first.matchAll(/^第 (\d+) 页：(\d+) 字/gm)].map((m) => ({ page: Number(m[1]), chars: Number(m[2]) }));
+  const imagePages = pages.filter((p) => p.chars < 200).map((p) => p.page);
+  const textPages = pages.filter((p) => p.chars >= 200).map((p) => p.page);
+  const step = opts.messages.filter((m) => m.role === 'assistant').length;
+  const ranges = (list: number[]) => list.join(',');
+  let n = 0;
+  const call = (name: string, args: Record<string, unknown>): ToolCall => ({ id: `mock_${step}_${n++}`, name, arguments: JSON.stringify(args) });
+  const plan: ToolCall[][] = [
+    [
+      ...(textPages.length ? [call('read_text', { pages: ranges(textPages) })] : []),
+      ...(textPages.length ? [call('set_pages', { pages: ranges(textPages), category: 'scenario' })] : []),
+    ],
+    imagePages.slice(0, 3).map((p) => call('view_page', { page: p })),
+    [
+      ...(imagePages[0] ? [call('save_image', { page: imagePages[0], left: 50, top: 80, right: 950, bottom: 700, kind: 'map', visibility: 'keeper', title: '模拟地图', description: '（模拟）一楼有三个房间，楼梯在走廊尽头。' })] : []),
+      ...(imagePages[1] ? [call('save_image', { page: imagePages[1], left: 100, top: 100, right: 900, bottom: 600, kind: 'handout', visibility: 'player', title: '模拟剪报', description: '（模拟）一份旧报纸剪报，调查员在图书馆查资料时可以得到。' })] : []),
+      ...imagePages.map((p, i) => call('set_pages', { pages: String(p), category: i === 0 ? 'map' : i === 1 ? 'handout' : 'art' })),
+      ...(imagePages[0] ? [call('transcribe', { page: imagePages[0], text: '（模拟转写）地图上标着：大厅、书房、地下室。' })] : []),
+    ],
+    [
+      call('add_pregen', {
+        name: '模拟调查员',
+        occupation: '记者',
+        age: 30,
+        characteristics: { STR: 50, CON: 60, SIZ: 55, DEX: 65, APP: 50, INT: 70, POW: 55, EDU: 75 },
+        luck: 50,
+        skills: { 侦查: 60, 图书馆使用: 70, 话术: 45 },
+        items: ['笔记本'],
+      }),
+    ],
+    [
+      call('write', { field: 'title', content: '模拟 PDF 剧本' }),
+      call('write', { field: 'era', content: '1920 年代，美国波士顿' }),
+      call('write', { field: 'intro', content: '（模拟简介）一位朋友请你调查一栋传闻闹鬼的老房子。' }),
+      call('write', { field: 'player_info', content: '推荐 1~4 人\n游玩时长约 2 小时' }),
+      call('write', { field: 'keeper_brief', content: '（模拟速览）只有守秘人能看的真相和流程。' }),
+      call('write', { field: 'glossary', content: 'Boston → 波士顿' }),
+    ],
+    [call('finish', { summary: '（模拟）整理完成' })],
+  ];
+  const steps = plan.filter((x) => x.length);
+  const calls = steps[Math.min(step, steps.length - 1)];
+  const message: AgentMessage = {
+    role: 'assistant',
+    content: null,
+    tool_calls: calls.map((c) => ({ id: c.id, type: 'function', function: { name: c.name, arguments: c.arguments } })),
+  };
+  return { content: '', toolCalls: calls, usage: { input: 2000 + step * 800, output: 300, cached: step * 600 }, finish: 'tool_calls', message };
+}
+
 /** 读取模型列表 */
 export async function listModels(baseUrl: string, apiKey: string): Promise<ModelInfo[]> {
   if (isMock(baseUrl)) {
@@ -460,14 +627,14 @@ const mockLastPrompt = new Map<string, string>();
 async function* mockStream(opts: ChatOptions): AsyncGenerator<ChatChunk> {
   // 测试用：一个总是出错的模型
   if (opts.model === 'mock/broken') throw new Error('模拟的服务错误');
-  const lastUser = [...opts.messages].reverse().find((m) => m.role === 'user')?.content ?? '';
+  const lastUser = textOf([...opts.messages].reverse().find((m) => m.role === 'user')?.content);
   if (lastUser.includes('【构思任务】')) yield* mockPlan(opts, lastUser);
   else {
     // 构思 / 执笔：执笔模型照着构思写
     if (lastUser.includes('【本轮构思】')) yield { content: '（照构思执笔）' };
     yield* mockReply(opts);
   }
-  const prompt = opts.messages.map((m) => `<${m.role}>${m.content}`).join('\n');
+  const prompt = opts.messages.map((m) => `<${m.role}>${textOf(m.content)}`).join('\n');
   const key = opts.sessionId ?? '';
   const prev = mockLastPrompt.get(key) ?? '';
   mockLastPrompt.set(key, prompt);
@@ -479,7 +646,7 @@ async function* mockStream(opts: ChatOptions): AsyncGenerator<ChatChunk> {
 
 /** 模拟构思模型：给出要点和指令 */
 async function* mockPlan(opts: ChatOptions, last: string): AsyncGenerator<ChatChunk> {
-  const system = opts.messages.find((m) => m.role === 'system')?.content ?? '';
+  const system = textOf(opts.messages.find((m) => m.role === 'system')?.content);
   const kp = system.includes('跑团的守秘人');
   const cmds = !kp
     ? ''
@@ -503,9 +670,9 @@ async function* mockPlan(opts: ChatOptions, last: string): AsyncGenerator<ChatCh
 }
 
 async function* mockReply(opts: ChatOptions): AsyncGenerator<ChatChunk> {
-  const system = opts.messages.find((m) => m.role === 'system')?.content ?? '';
+  const system = textOf(opts.messages.find((m) => m.role === 'system')?.content);
   const name = system.match(/你是「([^」]+)」/)?.[1];
-  const last = [...opts.messages].reverse().find((m) => m.role === 'user')?.content ?? '';
+  const last = textOf([...opts.messages].reverse().find((m) => m.role === 'user')?.content);
 
   // 主持人挑人：直接从候选名单里随机选
   if (system.includes('只输出下一位发言者的名字')) {
@@ -515,6 +682,29 @@ async function* mockReply(opts: ChatOptions): AsyncGenerator<ChatChunk> {
     return;
   }
 
+  // 模拟 PDF 逐页识别（固定流程）
+  if (system.includes('只输出一个 JSON 对象')) {
+    await sleep(150, opts.signal);
+    const page = Number(last.match(/第 (\d+) 页/)?.[1] ?? 0);
+    yield {
+      content: JSON.stringify({
+        category: page % 2 ? 'map' : 'handout',
+        transcription: `（模拟识别）第 ${page} 页的文字`,
+        items: [{ kind: page % 2 ? 'map' : 'handout', title: `模拟图片 ${page}`, visibility: page % 2 ? 'keeper' : 'player', description: '（模拟说明）', left: 100, top: 100, right: 900, bottom: 800 }],
+        pregen: null,
+      }),
+    };
+    return;
+  }
+  // 模拟 PDF 汇总整理（固定流程）
+  if (system.includes('【跳过的页】')) {
+    await sleep(150, opts.signal);
+    yield {
+      content:
+        '【标题】\n模拟固定流程剧本\n【时代背景】\n1920 年代，模拟的城市\n【玩家简介】\n（模拟简介）\n【开团须知】\n无\n【守秘人速览】\n（模拟速览）\n【译名表】\n无\n【跳过的页】\n1',
+    };
+    return;
+  }
   // 模拟剧本整理（不会给出任何剧情内容）
   if (system.includes('剧本整理助手')) {
     await sleep(200, opts.signal);
@@ -527,6 +717,16 @@ async function* mockReply(opts: ChatOptions): AsyncGenerator<ChatChunk> {
 
   // 跑团：模拟守秘人、AI 队友和规则助手
   if (system.includes('跑团的守秘人')) {
+    // 测试用：展示剧本里的手出物
+    if (last.includes('测试展示')) {
+      const title = system.match(/手出物「([^」]+)」（可以展示/)?.[1] ?? '不存在的手出物';
+      const text = `（模拟守秘人）老管家从抽屉里取出一张发黄的纸递给你。[展示:${title}]`;
+      for (const ch of Array.from(text)) {
+        await sleep(4, opts.signal);
+        yield { content: ch };
+      }
+      return;
+    }
     // 测试用：很长的回复（测试滚动）
     if (last.includes('测试长回复')) {
       const text = Array.from({ length: 24 }, (_, i) => `（模拟守秘人）第 ${i + 1} 段：雾气更浓了，远处传来若有若无的歌声，青石板路湿漉漉地反着光。`).join('\n\n');

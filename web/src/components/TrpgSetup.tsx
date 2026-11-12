@@ -1,15 +1,18 @@
-import { BookOpen, Dices, Play, UserRound, Wand2 } from 'lucide-react';
+import { BookOpen, Dices, Play, UserRound, Users, Wand2 } from 'lucide-react';
 import { useState } from 'react';
 import { quickInvestigator } from '../../../shared/coc';
 import type { Room } from '../../../shared/types';
 import { post, put } from '../api';
 import { attempt } from '../toast';
+import { PregenPicker } from './PregenPicker';
 
 /** 跑团开场前的引导卡片：创建调查员 → 开始游戏 */
 export function TrpgSetup({ room, onCreate }: { room: Room; onCreate: () => void }) {
   const trpg = room.trpg!;
   const sheet = trpg.sheets.player;
   const [starting, setStarting] = useState(false);
+  const [picking, setPicking] = useState(false);
+  const pregens = trpg.pregens ?? [];
   const teammates = room.participants.filter((p) => p.role === 'player');
 
   const quick = () => {
@@ -72,6 +75,11 @@ export function TrpgSetup({ room, onCreate }: { room: Room; onCreate: () => void
           <button className="btn btn-primary btn-lg" onClick={onCreate}>
             <UserRound /> 一步步创建调查员
           </button>
+          {pregens.length > 0 && (
+            <button className="btn btn-lg" onClick={() => setPicking(true)} title="剧本自带的预设调查员">
+              <Users /> 从剧本里选（{pregens.length} 位）
+            </button>
+          )}
           <button className="btn btn-lg" onClick={quick} title="随机生成一位记者调查员，之后可以在右侧修改">
             <Wand2 /> 直接随机一个
           </button>
@@ -84,8 +92,14 @@ export function TrpgSetup({ room, onCreate }: { room: Room; onCreate: () => void
           <button className="btn btn-lg" onClick={onCreate}>
             <Dices /> 重新创建调查员
           </button>
+          {pregens.length > 0 && (
+            <button className="btn btn-lg" onClick={() => setPicking(true)}>
+              <Users /> 换成剧本里的调查员
+            </button>
+          )}
         </div>
       )}
+      {picking && <PregenPicker room={room} onClose={() => setPicking(false)} />}
     </div>
   );
 }

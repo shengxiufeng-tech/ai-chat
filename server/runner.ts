@@ -2,9 +2,10 @@
 
 import { resolveGrowth, type InvestigatorSheet } from '../shared/coc.ts';
 import { otherSpeakerNames, stripImpersonation } from '../shared/text.ts';
-import type { Message, Participant, Room, RoomEvent, RunnerState, RunStatus } from '../shared/types.ts';
+import fs from 'node:fs';
+import { ASSET_KIND_LABELS, type Message, type Participant, type Room, type RoomEvent, type RunnerState, type RunStatus } from '../shared/types.ts';
 import { DEFAULT_CONTEXT_WINDOW, fitToContext } from './context.ts';
-import { completeChat, contextWindowOf, streamChat, type ChatMessage } from './llm.ts';
+import { completeChat, contextWindowOf, streamChat, type ChatPart, type WireMessage } from './llm.ts';
 import { activePlanner, appendToLast, applyPlanCommands, plannerInstruction, writerBlock } from './planner.ts';
 import {
   buildKpMessages,
@@ -435,6 +436,22 @@ export class RoomRunner {
       room.messages.push(msg);
       this.emit({ type: 'message_added', message: msg });
     }
+    // 守秘人展示的手出物 / 地图
+    for (const asset of res.shows) {
+      const msg: Message = {
+        id: newId(),
+        role: 'system',
+        kind: 'handout',
+        speakerName: '守秘人',
+        content: `守秘人展示了${ASSET_KIND_LABELS[asset.kind]}「${asset.title}」`,
+        asset: { id: asset.id, title: asset.title, kind: asset.kind },
+        status: 'done',
+        createdAt: Date.now(),
+      };
+      room.messages.push(msg);
+      this.emit({ type: 'message_added', message: msg });
+    }
+    if (res.shows.length) this.emitRoomMeta();
     // 笔记有更新时，在主对话里提示一下
     for (const ev of res.notes) {
       const msg = noteMessage(newId(), ev);
@@ -610,16 +627,49 @@ export class RoomRunner {
     return pickRoundRobin(room);
   }
 
-  private buildMessages(room: Room, p: Participant, history: Message[]) {
+  /** 剧本地图的图片（data URL），按文件缓存 */
+  private mapImageCache = new Map<string, string>();
+  private mapImage(roomId: string, assetId: string): string | undefined {
+    const file = this.store.assetPath(roomId, assetId);
+    let url = this.mapImageCache.get(file);
+    if (!url) {
+      if (!fs.existsSync(file)) return undefined;
+      url = `data:image/jpeg;base64,${fs.readFileSync(file).toString('base64')}`;
+      this.mapImageCache.set(file, url);
+    }
+    return url;
+  }
+
+  /** 守秘人：把剧本地图附在第一条消息里（位置固定，不影响提示缓存） */
+  private withMaps(room: Room, messages: WireMessage[]): WireMessage[] {
+    const trpg = room.trpg;
+    const maps = (trpg?.assets ?? []).filter((a) => a.kind === 'map');
+    if (!maps.length || trpg?.mapsToKp === false) return messages;
+    const parts: ChatPart[] = [{ type: 'text', text: '【剧本地图】下面是剧本附带的地图，只有你（守秘人）能看到，主持时用来确定方位、距离和路线：' }];
+    for (const m of maps) {
+      const url = this.mapImage(room.id, m.id);
+      if (!url) continue;
+      parts.push({ type: 'text', text: `地图「${m.title}」：` }, { type: 'image_url', image_url: { url } });
+    }
+    if (parts.length === 1) return messages;
+    const i = messages.findIndex((m) => m.role !== 'system');
+    const first = messages[i];
+    if (i < 0 || first.role !== 'user') return messages;
+    const out = messages.slice();
+    out[i] = { role: 'user', content: [...parts, ...(typeof first.content === 'string' ? [{ type: 'text' as const, text: first.content }] : first.content)] };
+    return out;
+  }
+
+  private buildMessages(room: Room, p: Participant, history: Message[]): WireMessage[] {
     if (room.mode === 'trpg' && room.trpg) {
-      if (p.role === 'kp') return buildKpMessages(room, p, history);
+      if (p.role === 'kp') return this.withMaps(room, buildKpMessages(room, p, history));
       if (p.role === 'player') return buildTeammateMessages(room, p, history);
     }
     return buildAgentMessages(room, p, history);
   }
 
   /** 按模型的上下文窗口裁掉最早的对话；第一次裁剪时提示一下 */
-  private async fitFor(p: Participant, model: string, build: (h: Message[]) => ChatMessage[], history: Message[]) {
+  private async fitFor(p: Participant, model: string, build: (h: Message[]) => WireMessage[], history: Message[]) {
     const room = this.room;
     const settings = this.store.getSettings();
     const window = (await contextWindowOf(settings.baseUrl, settings.apiKey, model)) ?? DEFAULT_CONTEXT_WINDOW;

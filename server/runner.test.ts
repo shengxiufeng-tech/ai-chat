@@ -10,6 +10,7 @@ import type { Participant, Room } from '../shared/types.ts';
 import { DEFAULT_ROOM_SETTINGS } from '../shared/types.ts';
 import { RunnerManager } from './runner.ts';
 import { Store } from './store.ts';
+import { encodeJpeg } from './images.ts';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -238,6 +239,41 @@ test('孤注一掷沿用修正后的成功线，不重新掷修正骰', async ()
     assert.equal(pushed.roll!.target, 40);
     assert.equal(pushed.roll!.baseTarget, 60);
     assert.equal(pushed.roll!.modifier, '-20');
+  } finally {
+    await cleanup();
+  }
+});
+
+test('剧本图片：守秘人能看到地图图片，[展示] 把手出物给玩家看', async () => {
+  const { store, room, runner, cleanup } = setup();
+  try {
+    room.trpg!.assets = [
+      { id: 'map1', kind: 'map', title: '宅邸一楼', description: '大厅、书房、楼梯', visibility: 'keeper', page: 3, width: 8, height: 8 },
+      { id: 'h1', kind: 'handout', title: '旧报纸剪报', description: '1918 年的火灾报道', visibility: 'player', page: 4, width: 8, height: 8 },
+    ];
+    const file = store.assetPath(room.id, 'map1');
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, encodeJpeg({ width: 8, height: 8, data: new Uint8Array(8 * 8 * 4).fill(200) }));
+    const kp = room.participants.find((p) => p.role === 'kp')!;
+    room.messages.push({ id: 'h', role: 'human', speakerName: '我', content: '我进门', status: 'done', createdAt: 1 });
+
+    // 地图附在第一条消息里；系统提示里有图片清单
+    const msgs = (runner as any).buildMessages(room, kp, room.messages);
+    assert.match(msgs[0].content, /【剧本里的手出物和地图】[\s\S]*手出物「旧报纸剪报」（可以展示给玩家）/);
+    assert.match(msgs[0].content, /地图「宅邸一楼」（守秘人专用，不能展示）/);
+    assert.ok(Array.isArray(msgs[1].content), '第一条消息带图片');
+    assert.equal(msgs[1].content.filter((p: { type: string }) => p.type === 'image_url').length, 1);
+    room.trpg!.mapsToKp = false;
+    assert.equal(typeof (runner as any).buildMessages(room, kp, room.messages)[1].content, 'string', '关掉以后不附图片');
+    room.messages = [];
+
+    // [展示:旧报纸剪报] → 对话里出现手出物
+    runner.addHumanMessage('测试展示');
+    await until(() => room.messages.some((m) => m.kind === 'handout'));
+    const shown = room.messages.find((m) => m.kind === 'handout')!;
+    assert.deepEqual(shown.asset, { id: 'h1', title: '旧报纸剪报', kind: 'handout' });
+    assert.equal(room.trpg!.assets![1].shown, true);
+    assert.equal(room.trpg!.assets![0].shown, undefined);
   } finally {
     await cleanup();
   }

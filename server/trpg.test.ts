@@ -14,6 +14,7 @@ import {
   buildTeammateMessages,
   parseSuggestions,
   processKpCommands,
+  findAsset,
   resolveCheck,
   resolveSan,
 } from './trpg.ts';
@@ -538,4 +539,29 @@ test('解析修正参数', () => {
 test('规则小贴士里引用的指令显示成文字，正文里的指令直接去掉', () => {
   const text = '你看到了不该看的东西。[理智:0/1]\n【规则小贴士】理智检定：标记为 [理智:0/1] 意味着成功不扣理智，失败扣 1 点。';
   assert.equal(kpDisplayText(text), '你看到了不该看的东西。\n【规则小贴士】理智检定：标记为 「理智 0/1」 意味着成功不扣理智，失败扣 1 点。');
+});
+
+test('[展示]：只展示可以给玩家看的图片，队友能看到展示过的手出物内容', () => {
+  const room = trpgRoom();
+  room.trpg!.assets = [
+    { id: 'm', kind: 'map', title: '地下室', description: '密道在北墙', visibility: 'keeper', page: 1, width: 1, height: 1 },
+    { id: 'h', kind: 'handout', title: '日记残页', description: '「它在墙里」', visibility: 'player', page: 2, width: 1, height: 1 },
+  ];
+  assert.equal(findAsset(room.trpg!.assets, '「日记残页」')?.id, 'h');
+  assert.equal(findAsset(room.trpg!.assets, '日记')?.id, 'h');
+  assert.equal(findAsset(room.trpg!.assets, '不存在'), undefined);
+  const res = processKpCommands(room, '你翻开日记。[展示:日记残页][展示:地下室][展示:不存在]');
+  assert.deepEqual(res.shows.map((a) => a.id), ['h']);
+  assert.deepEqual(res.problems, [], '展示失败不提示名字，免得剧透');
+  assert.equal(stripCommands('你翻开日记。[展示:日记残页]'), '你翻开日记。');
+
+  room.messages = [
+    msg({ role: 'ai', participantId: 'kp', speakerName: '守秘人', content: '你翻开日记。[展示:日记残页]' }),
+    msg({ role: 'system', kind: 'handout', speakerName: '守秘人', content: '守秘人展示了手出物「日记残页」', asset: { id: 'h', title: '日记残页', kind: 'handout' } }),
+  ];
+  const mate = buildTeammateMessages(room, room.participants.find((p) => p.role === 'player')!, room.messages);
+  assert.match(mate.at(-1)!.content, /【展示】守秘人展示了手出物「日记残页」：「它在墙里」/);
+  const kp = buildKpMessages(room, room.participants[0], room.messages);
+  assert.match(kp.at(-1)!.content, /【展示】守秘人展示了手出物「日记残页」/);
+  assert.doesNotMatch(kp.at(-1)!.content, /它在墙里/, '守秘人那边不重复内容（系统提示里已经有）');
 });

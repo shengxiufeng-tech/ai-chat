@@ -1,10 +1,11 @@
-import { BookMarked, Check, Pencil, Trash2, UserRound, X, Search as SearchIcon } from 'lucide-react';
+import { BookMarked, Check, Pencil, ScrollText, Trash2, UserRound, X, Search as SearchIcon } from 'lucide-react';
 import { useState } from 'react';
 import { NOTE_KIND_LABELS, type NoteEntry, type NoteKind } from '../../../shared/coc';
-import type { Room } from '../../../shared/types';
+import { ASSET_KIND_LABELS, type Room } from '../../../shared/types';
 import { del, patch } from '../api';
 import { askConfirm } from '../confirm';
 import { attempt } from '../toast';
+import { assetUrl, Lightbox } from './HandoutCard';
 
 function time(ts: number) {
   const d = new Date(ts);
@@ -12,6 +13,33 @@ function time(ts: number) {
 }
 
 /** 守秘人笔记：守秘人自动记下的 NPC 和线索，玩家和 AI 队友都能看到 */
+/** 守秘人展示过的手出物和地图：随时可以再翻出来看 */
+function ShownAssets({ room }: { room: Room }) {
+  const [open, setOpen] = useState<{ src: string; title: string } | null>(null);
+  const shown = (room.trpg?.assets ?? []).filter((a) => a.shown);
+  if (!shown.length) return null;
+  return (
+    <div className="notes-section">
+      <div className="section-title notes-title">
+        <ScrollText />
+        看过的手出物和地图
+        <span className="badge">{shown.length}</span>
+      </div>
+      <div className="asset-grid">
+        {shown.map((a) => (
+          <button key={a.id} className="asset-thumb" onClick={() => setOpen({ src: assetUrl(room.id, a.id), title: `${ASSET_KIND_LABELS[a.kind]}「${a.title}」` })}>
+            <img src={assetUrl(room.id, a.id)} alt={a.title} loading="lazy" />
+            <span>
+              {ASSET_KIND_LABELS[a.kind]}「{a.title}」
+            </span>
+          </button>
+        ))}
+      </div>
+      {open && <Lightbox src={open.src} title={open.title} onClose={() => setOpen(null)} />}
+    </div>
+  );
+}
+
 export function NotesPanel({ room }: { room: Room }) {
   const trpg = room.trpg!;
   const notes = trpg.notes ?? [];
@@ -25,6 +53,7 @@ export function NotesPanel({ room }: { room: Room }) {
           </div>
           <p>守秘人笔记已关闭。</p>
           <p className="hint">开启后，守秘人会把重要的 NPC 和你发现的线索自动记在这里，长时间游戏也不容易前后矛盾。</p>
+          <ShownAssets room={room} />
           <button className="btn btn-primary" onClick={() => attempt(() => patch(`/rooms/${room.id}/trpg`, { notebook: true }))}>
             开启笔记
           </button>
@@ -59,6 +88,7 @@ export function NotesPanel({ room }: { room: Room }) {
         <BookMarked />
         <span>守秘人会把重要的 NPC 和你发现的线索记在这里，你和 AI 队友都能看到。记错了可以直接改或删掉。</span>
       </div>
+      <ShownAssets room={room} />
       {section('clue')}
       {section('npc')}
     </div>

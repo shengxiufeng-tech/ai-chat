@@ -7,7 +7,7 @@ import { EffortPicker } from './EffortPicker';
 import { EraInput } from './EraInput';
 import { Modal } from './Modal';
 import { ModelInput } from './ModelInput';
-import { ScriptImport } from './ScriptImport';
+import { clearPdfImport, ScriptImport } from './ScriptImport';
 import { Field, Segmented, ToggleRow } from './ui';
 
 const PRESET_ICONS: Record<string, string> = {
@@ -27,7 +27,7 @@ const SCENARIOS = [
     desc: '1927 年江南水乡。老友在小镇失踪，信里只说"镇上有一口会唱歌的井"。约 1~2 小时。',
   },
   { id: 'improv', icon: '🎲', name: 'AI 即兴剧本', desc: '给一个主题，守秘人现场编一个短篇调查故事。' },
-  { id: 'custom', icon: '📜', name: '我自己的剧本', desc: '导入剧本文件（txt / doc / docx）或粘贴文字，AI 会帮你挡住剧透。' },
+  { id: 'custom', icon: '📜', name: '我自己的剧本', desc: '导入剧本文件（PDF / Word / txt）或粘贴文字，AI 会帮你挡住剧透。' },
 ];
 
 export function NewRoomModal({
@@ -92,7 +92,11 @@ export function NewRoomModal({
         : post<Room>('/rooms', { presetId, title, scenario, model }),
     );
     setCreating(false);
-    if (room) onCreated(room);
+    if (room) {
+      // PDF 剧本的整理结果已经用掉了，下次打开窗口不再显示
+      if (mode === 'trpg' && t.prepared?.importId) clearPdfImport();
+      onCreated(room);
+    }
   };
 
   const preset = presets.find((p) => p.id === presetId);

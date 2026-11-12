@@ -26,6 +26,7 @@ import { effortLabel, type Message } from '../../../shared/types';
 import { copyText } from '../clipboard';
 import { shortModel } from '../models';
 import { EffortMeter } from './EffortPicker';
+import { HandoutCard } from './HandoutCard';
 import { RollCard } from './RollCard';
 
 function time(ts: number) {
@@ -88,6 +89,7 @@ export const MessageItem = memo(function MessageItem({
   message: m,
   isLast,
   isKp,
+  roomId,
   playerName,
   onEdit,
   onDelete,
@@ -102,6 +104,8 @@ export const MessageItem = memo(function MessageItem({
   isLast: boolean;
   /** 守秘人的消息：隐藏骰子指令、单独显示规则小贴士 */
   isKp?: boolean;
+  /** 显示手出物图片用 */
+  roomId?: string;
   /** 跑团里玩家的调查员名字 */
   playerName?: string;
   onEdit: (id: string, content: string) => void;
@@ -131,6 +135,10 @@ export const MessageItem = memo(function MessageItem({
         </button>
       </div>
     );
+  }
+
+  if (m.kind === 'handout' && m.asset && roomId) {
+    return <HandoutCard roomId={roomId} asset={m.asset} />;
   }
 
   if (m.kind === 'roll' && m.roll) {

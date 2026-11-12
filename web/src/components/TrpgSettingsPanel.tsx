@@ -1,9 +1,10 @@
 import { Eye, EyeOff, Lock, Trash2 } from 'lucide-react';
 import { useState } from 'react';
-import type { Room } from '../../../shared/types';
+import { ASSET_KIND_LABELS, type Room } from '../../../shared/types';
 import { del, patch } from '../api';
 import { askConfirm } from '../confirm';
 import { attempt } from '../toast';
+import { assetUrl } from './HandoutCard';
 import { Field, ToggleRow } from './ui';
 
 export function TrpgSettingsPanel({ room }: { room: Room }) {
@@ -58,6 +59,17 @@ export function TrpgSettingsPanel({ room }: { room: Room }) {
         checked={trpg.memo}
         onChange={(v) => set({ memo: v })}
       />
+      {!!trpg.assets?.some((a) => a.kind === 'map') && (
+        <>
+          <div className="divider" />
+          <ToggleRow
+            label="把剧本地图发给守秘人"
+            hint="守秘人每轮都能看到剧本里的地图图片，描述方位和路线更准确（守秘人的模型要能看图；不能看图的模型请关掉）"
+            checked={trpg.mapsToKp !== false}
+            onChange={(v) => set({ mapsToKp: v })}
+          />
+        </>
+      )}
       <div className="divider" />
       <Field
         label="剧透区"
@@ -99,6 +111,21 @@ export function TrpgSettingsPanel({ room }: { room: Room }) {
                   <div className="note-text">{m.text}</div>
                 </div>
               ))
+            )}
+            {!!trpg.assets?.length && (
+              <>
+                <div className="section-title" style={{ marginTop: 6 }}>手出物和地图</div>
+                <div className="asset-grid">
+                  {trpg.assets.map((a) => (
+                    <a key={a.id} className="asset-thumb" href={assetUrl(room.id, a.id)} target="_blank" rel="noreferrer" title={a.description}>
+                      <img src={assetUrl(room.id, a.id)} alt={a.title} loading="lazy" />
+                      <span>
+                        {ASSET_KIND_LABELS[a.kind]}「{a.title}」{a.visibility === 'keeper' ? '（守秘人专用）' : a.shown ? '（已展示）' : ''}
+                      </span>
+                    </a>
+                  ))}
+                </div>
+              </>
             )}
             <div className="section-title" style={{ marginTop: 6 }}>剧本内容</div>
             <div className="scenario-intro" style={{ whiteSpace: 'pre-wrap', maxHeight: 360, overflowY: 'auto' }}>

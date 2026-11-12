@@ -15,6 +15,7 @@ import type {
 } from '../shared/types.ts';
 import { DEFAULT_ROOM_SETTINGS } from '../shared/types.ts';
 import { AccessControl, lanAddresses } from './access.ts';
+import { ImportManager } from './imports.ts';
 import { estimateTokens } from './context.ts';
 import { completeChat, completeChatWithUsage, listModels, primeModelCache, type ChatMessage } from './llm.ts';
 import { BUILTIN_TEMPLATES, ROOM_PRESETS } from './presets.ts';
@@ -39,6 +40,9 @@ const LAN_MODE = !['127.0.0.1', 'localhost', '::1'].includes(HOST);
 const DATA_DIR = path.resolve(process.env.DATA_DIR || './data');
 
 const store = new Store(DATA_DIR);
+// PDF 剧本的导入任务；房间里的手出物和地图放在 assets/<房间 id>/ 下
+const imports = new ImportManager(path.join(DATA_DIR, 'imports'));
+const assetsDir = (roomId: string) => path.join(DATA_DIR, 'assets', roomId);
 const runners = new RunnerManager(store);
 const app = express();
 app.use(express.json({ limit: '25mb' }));
@@ -253,6 +257,69 @@ app.post(
   }),
 );
 
+// ---------------- PDF 剧本导入（整理助手） ----------------
+
+app.post(
+  '/api/imports',
+  h((req) => {
+    const b = req.body ?? {};
+    return imports.create(String(b.fileName ?? ''), Math.floor(Number(b.pageCount)));
+  }),
+);
+
+app.post(
+  '/api/imports/:id/pages/:page',
+  h((req) => {
+    const b = req.body ?? {};
+    const jpeg = typeof b.jpeg === 'string' ? Buffer.from(b.jpeg.replace(/^data:image\/jpeg;base64,/, ''), 'base64') : Buffer.alloc(0);
+    imports.savePage(param(req, 'id'), Math.floor(Number(param(req, 'page'))), String(b.text ?? ''), Number(b.images) || 0, jpeg);
+    return { uploaded: imports.get(param(req, 'id')).uploaded };
+  }),
+);
+
+app.post(
+  '/api/imports/:id/start',
+  h((req) => {
+    const b = req.body ?? {};
+    const s = store.getSettings();
+    return imports.start(param(req, 'id'), {
+      baseUrl: s.baseUrl,
+      apiKey: s.apiKey,
+      model: String(b.model || s.defaultModel || ''),
+      reasoningEffort: typeof b.reasoningEffort === 'string' && b.reasoningEffort ? b.reasoningEffort : undefined,
+    });
+  }),
+);
+
+app.get(
+  '/api/imports/:id',
+  h((req) => imports.get(param(req, 'id'))),
+);
+
+app.post(
+  '/api/imports/:id/cancel',
+  h((req) => imports.cancel(param(req, 'id'))),
+);
+
+app.post(
+  '/api/imports/:id/assemble',
+  h((req) => imports.assemble(param(req, 'id'), req.body?.excluded)),
+);
+
+// 浏览器读 PDF 用的字符映射和标准字体（中文 PDF 常用的 CID 字体需要它们才能取出文字）
+const pdfjsDir = path.resolve('node_modules/pdfjs-dist');
+app.use('/api/pdfjs/cmaps', express.static(path.join(pdfjsDir, 'cmaps'), { maxAge: '7d' }));
+app.use('/api/pdfjs/standard_fonts', express.static(path.join(pdfjsDir, 'standard_fonts'), { maxAge: '7d' }));
+
+// 房间里的手出物和地图图片
+app.get('/api/rooms/:id/assets/:assetId', (req, res) => {
+  const room = store.getRoom(param(req, 'id'));
+  const asset = room?.trpg?.assets?.find((a) => a.id === param(req, 'assetId'));
+  if (!room || !asset) return res.status(404).json({ error: '图片不存在' });
+  res.setHeader('Cache-Control', 'private, max-age=86400');
+  res.sendFile(path.join(assetsDir(room.id), `${asset.id}.jpg`));
+});
+
 // ---------------- 模板与预设 ----------------
 
 app.get(
@@ -376,6 +443,17 @@ function createTrpgRoom(o: TrpgCreateOptions): Room {
     memo: o.memo ?? true,
     memos: [],
   };
+  // PDF 剧本：把整理助手裁下来的手出物和地图拷贝到房间目录
+  if (o.scenarioId === 'custom' && p?.importId) {
+    try {
+      const { assets, pregens } = imports.takeAssets(String(p.importId), assetsDir(room.id));
+      if (assets.length) trpg.assets = assets;
+      if (pregens?.length) trpg.pregens = pregens;
+      trpg.mapsToKp = true;
+    } catch (err) {
+      console.warn('拷贝剧本图片失败：', err);
+    }
+  }
   const count = Math.max(0, Math.min(3, Math.floor(o.teammateCount ?? 0)));
   const occupations = [...OCCUPATIONS].sort(() => Math.random() - 0.5);
   const usedNames = new Set<string>();
@@ -499,6 +577,7 @@ app.delete(
     getRoom(id);
     runners.remove(id);
     store.deleteRoom(id);
+    fs.rmSync(assetsDir(id), { recursive: true, force: true });
   }),
 );
 
@@ -642,6 +721,7 @@ app.patch(
     for (const key of ['teachingMode', 'autoRoll', 'teammatesAct', 'notebook', 'memo'] as const) {
       if (typeof b[key] === 'boolean') room.trpg[key] = b[key];
     }
+    if (typeof b.mapsToKp === 'boolean') room.trpg.mapsToKp = b.mapsToKp;
     store.touchRoom(room.id, { immediate: true });
     runners.get(room.id).emitRoomMeta();
     return { ok: true };

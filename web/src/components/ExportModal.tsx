@@ -241,7 +241,7 @@ const ExportDocView = forwardRef<HTMLDivElement, { room: Room; messages: Message
           if (m.kind) {
             return (
               <div key={m.id} className="x-roll">
-                {m.kind === 'note' ? '📒' : '🎲'} {m.content}
+                {m.kind === 'note' ? '📒' : m.kind === 'handout' ? '📜' : '🎲'} {m.content}
               </div>
             );
           }

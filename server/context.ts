@@ -1,7 +1,7 @@
 // 上下文长度管理：估算 token，按模型的上下文窗口裁掉最早的对话
 
 import type { Message } from '../shared/types.ts';
-import type { ChatMessage } from './llm.ts';
+import type { ChatPart, WireMessage } from './llm.ts';
 
 /** 模型列表里查不到上下文窗口时的默认值 */
 export const DEFAULT_CONTEXT_WINDOW = 128_000;
@@ -27,8 +27,14 @@ export function estimateTokens(text: string) {
 
 const PER_MESSAGE = 6;
 
-export function chatTokens(messages: ChatMessage[]) {
-  return messages.reduce((sum, m) => sum + estimateTokens(m.content) + PER_MESSAGE, 0);
+/** 一张图片大约占多少 token（各家算法不同，按常见的 1600 像素页面估一个偏大的值） */
+export const IMAGE_TOKENS = 1600;
+
+const contentTokens = (c: string | ChatPart[]) =>
+  typeof c === 'string' ? estimateTokens(c) : c.reduce((n, p) => n + (p.type === 'text' ? estimateTokens(p.text) : IMAGE_TOKENS), 0);
+
+export function chatTokens(messages: WireMessage[]) {
+  return messages.reduce((sum, m) => sum + contentTokens(m.content) + PER_MESSAGE, 0);
 }
 
 /** 输入能用多少 token：给回复（含思考过程）留出 20%（4k~32k），再留 5% 余量 */
@@ -43,11 +49,11 @@ export const omissionNote = (n: number) => `（为了控制上下文长度，更
  * 让请求放进模型的上下文窗口：先完整构建，超了就从最早的消息开始丢，再重新构建。
  * 系统提示和最近的消息总是保留；返回丢掉了多少条。
  */
-export function fitToContext(
-  build: (history: Message[]) => ChatMessage[],
+export function fitToContext<M extends WireMessage>(
+  build: (history: Message[]) => M[],
   history: Message[],
   contextWindow: number,
-): { messages: ChatMessage[]; dropped: number; tokens: number } {
+): { messages: M[]; dropped: number; tokens: number } {
   const budget = inputBudget(contextWindow);
   let messages = build(history);
   let tokens = chatTokens(messages);
@@ -65,7 +71,13 @@ export function fitToContext(
     // 告诉模型前面省略了内容（加在系统提示之后的第一条消息开头）
     const first = messages.findIndex((m) => m.role !== 'system');
     if (first >= 0) {
-      messages[first] = { ...messages[first], content: `${omissionNote(dropped)}\n\n${messages[first].content}` };
+      const m = messages[first];
+      const note = omissionNote(dropped);
+      messages[first] = (
+        typeof m.content === 'string'
+          ? { ...m, content: `${note}\n\n${m.content}` }
+          : { ...m, content: [{ type: 'text', text: note }, ...m.content] }
+      ) as M;
     }
     tokens = chatTokens(messages);
   }

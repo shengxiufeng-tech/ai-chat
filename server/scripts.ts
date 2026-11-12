@@ -57,15 +57,18 @@ const SECTION_NAMES = ['标题', '时代背景', '玩家简介', '开团须知',
 type Section = (typeof SECTION_NAMES)[number];
 
 /** 解析 AI 按【标题】【时代背景】…… 分段的回答 */
-export function parseSections(text: string): Partial<Record<Section, string>> {
-  const out: Partial<Record<Section, string>> = {};
-  const re = new RegExp(`【(${SECTION_NAMES.join('|')})】`, 'g');
+export function parseSections<N extends string = Section>(
+  text: string,
+  names: readonly N[] = SECTION_NAMES as unknown as readonly N[],
+): Partial<Record<N, string>> {
+  const out: Partial<Record<N, string>> = {};
+  const re = new RegExp(`【(${names.join('|')})】`, 'g');
   const marks = [...text.matchAll(re)];
   marks.forEach((m, i) => {
     const start = (m.index ?? 0) + m[0].length;
     const end = i + 1 < marks.length ? marks[i + 1].index : text.length;
     const body = text.slice(start, end).trim();
-    if (body) out[m[1] as Section] = body;
+    if (body) out[m[1] as N] = body;
   });
   return out;
 }

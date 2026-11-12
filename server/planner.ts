@@ -4,15 +4,19 @@
 
 import { COMMAND_RE } from '../shared/coc.ts';
 import type { PlannerConfig } from '../shared/types.ts';
-import type { ChatMessage } from './llm.ts';
+import type { WireMessage } from './llm.ts';
 
 /** 把一段说明接在最后一条用户消息后面（最后一条不是用户消息时单独加一条） */
-export function appendToLast(messages: ChatMessage[], text: string): ChatMessage[] {
+export function appendToLast(messages: WireMessage[], text: string): WireMessage[] {
   if (!text) return messages;
   const out = messages.slice();
   const last = out.at(-1);
-  if (last && last.role === 'user') out[out.length - 1] = { ...last, content: `${last.content}\n\n${text}` };
-  else out.push({ role: 'user', content: text });
+  if (last && last.role === 'user') {
+    out[out.length - 1] =
+      typeof last.content === 'string'
+        ? { role: 'user', content: `${last.content}\n\n${text}` }
+        : { role: 'user', content: [...last.content, { type: 'text', text }] };
+  } else out.push({ role: 'user', content: text });
   return out;
 }
 
