@@ -1,6 +1,7 @@
 // 前后端共用的数据类型
 
 import type { InvestigatorSheet, MemoEntry, NoteEntry, NoteEvent, RollRecord, TrpgState } from './coc.ts';
+import type { WerewolfState, WwVisibility } from './werewolf.ts';
 
 export type ParticipantRole = 'kp' | 'player';
 
@@ -48,7 +49,7 @@ export interface CharacterTemplate {
   builtin?: boolean;
 }
 
-export type RoomMode = 'chat' | 'trpg';
+export type RoomMode = 'chat' | 'trpg' | 'werewolf';
 export type TurnMode = 'round_robin' | 'moderator' | 'manual';
 export type HumanRole = 'host' | 'participant' | 'observer';
 export type ReplyLength = 'short' | 'medium' | 'long';
@@ -99,11 +100,15 @@ export interface Message {
   /** 跑团：玩家的场外发言 */
   ooc?: boolean;
   /** 跑团：系统消息的种类（骰子 / 笔记提示） */
-  kind?: 'roll' | 'note' | 'handout';
+  kind?: 'roll' | 'note' | 'handout' | 'ww';
   /** 跑团：骰子 / 数值变化记录 */
   roll?: RollRecord;
   /** 跑团：守秘人记下的笔记 */
   note?: NoteEvent;
+  /** 狼人杀：谁能看到这条消息（不写就是所有人） */
+  visibility?: WwVisibility;
+  /** 狼人杀：法官消息的种类和附带数据 */
+  ww?: WwMessageInfo;
   /** 跑团：守秘人展示给玩家的手出物 / 地图 */
   asset?: { id: string; title: string; kind: AssetKind };
   /** 生成这条消息时，因为上下文太长而没有发给模型的早期消息条数 */
@@ -133,8 +138,23 @@ export interface Room {
   settings: RoomSettings;
   /** 跑团房间的状态 */
   trpg?: TrpgState;
+  /** 狼人杀房间的状态 */
+  werewolf?: WerewolfState;
   createdAt: number;
   updatedAt: number;
+}
+
+/** 狼人杀里法官发出的消息 */
+export interface WwMessageInfo {
+  type: 'phase' | 'announce' | 'vote' | 'private' | 'night' | 'skill' | 'end';
+  /** 投票结果 */
+  votes?: { voter: number; target: number | null }[];
+  /** 投票是在放逐还是选警长 */
+  voteKind?: 'exile' | 'sheriff';
+  /** 这条消息说的是哪个座位（发言、遗言等） */
+  seat?: number;
+  /** 发言的类型 */
+  speech?: 'speech' | 'pk' | 'lastWords' | 'sheriffSpeech' | 'wolfchat';
 }
 
 /** 一次请求的 token 用量 */

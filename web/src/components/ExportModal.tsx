@@ -13,6 +13,7 @@ import {
   toHtml,
   toMarkdown,
   toPlainText,
+  visibilityTag,
   type ExportOptions,
 } from '../exportDoc';
 import { copyText } from '../clipboard';
@@ -25,8 +26,10 @@ import { Field, Segmented, ToggleRow } from './ui';
 
 type Range = 'all' | 'recent' | 'custom';
 
-export function ExportModal({ room, onClose }: { room: Room; onClose: () => void }) {
-  const total = room.messages.length;
+/** visibleMessages：狼人杀里只导出当前视角能看到的消息（JSON 备份仍是完整的房间） */
+export function ExportModal({ room, visibleMessages, onClose }: { room: Room; visibleMessages?: Message[]; onClose: () => void }) {
+  const all = visibleMessages ?? room.messages;
+  const total = all.length;
   const [range, setRange] = useState<Range>('all');
   const [recent, setRecent] = useState(Math.min(20, total));
   const [from, setFrom] = useState(1);
@@ -46,12 +49,12 @@ export function ExportModal({ room, onClose }: { room: Room; onClose: () => void
   const messages = useMemo(() => {
     const list =
       range === 'recent'
-        ? room.messages.slice(-Math.max(1, recent))
+        ? all.slice(-Math.max(1, recent))
         : range === 'custom'
-          ? room.messages.slice(Math.max(0, from - 1), Math.max(from, to))
-          : room.messages;
+          ? all.slice(Math.max(0, from - 1), Math.max(from, to))
+          : all;
     return list.filter((m) => m.status !== 'streaming' && m.status !== 'error' && (o.rolls || !m.kind));
-  }, [room.messages, range, recent, from, to, o.rolls]);
+  }, [all, range, recent, from, to, o.rolls]);
 
   const base = room.title || '对话';
 
@@ -215,6 +218,7 @@ export function ExportModal({ room, onClose }: { room: Room; onClose: () => void
             <ToggleRow label="思考过程" checked={o.reasoning} onChange={(v) => set('reasoning', v)} />
             <ToggleRow label={room.mode === 'trpg' ? '剧本简介' : '场景 / 话题'} checked={o.scenario} onChange={(v) => set('scenario', v)} />
             {room.mode === 'trpg' && <ToggleRow label="骰子、数值、笔记和手出物" checked={o.rolls} onChange={(v) => set('rolls', v)} />}
+            {room.mode === 'werewolf' && <ToggleRow label="法官公告和投票" checked={o.rolls} onChange={(v) => set('rolls', v)} />}
           </div>
           <div className="divider" />
           <div className="export-actions">
@@ -281,7 +285,8 @@ const ExportDocView = forwardRef<HTMLDivElement, { room: Room; messages: Message
           if (m.kind) {
             return (
               <div key={m.id} className="x-roll">
-                {m.kind === 'note' ? '📒' : '🎲'} {m.content}
+                {m.kind === 'note' ? '📒' : m.kind === 'ww' ? '⚖️' : '🎲'} {visibilityTag(m)}
+                {m.content}
               </div>
             );
           }
@@ -295,6 +300,7 @@ const ExportDocView = forwardRef<HTMLDivElement, { room: Room; messages: Message
                   <span className="x-name" style={{ color: human ? undefined : m.color }}>
                     {speakerOf(room, m)}
                     {m.ooc ? '（场外）' : ''}
+                    {visibilityTag(m)}
                   </span>
                   {o.modelInfo && m.model && (
                     <span className="x-model">

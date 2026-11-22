@@ -178,6 +178,10 @@ export const MessageItem = memo(function MessageItem({
             {isHuman && playerName && !m.ooc ? `${playerName}` : m.speakerName}
           </span>
           {isHuman && m.ooc && <span className="badge">场外</span>}
+          {m.visibility === 'wolves' && <span className="badge badge-danger">狼队频道</span>}
+          {m.ww?.speech && m.ww.speech !== 'speech' && m.ww.speech !== 'wolfchat' && (
+            <span className="badge">{{ pk: 'PK 发言', lastWords: '遗言', sheriffSpeech: '警长竞选' }[m.ww.speech]}</span>
+          )}
           <ModelTag model={m.model} effort={m.reasoningEffort} planner={m.planner} />
           <span className="msg-time">{time(m.createdAt)}</span>
           {m.status === 'interrupted' && <span className="badge badge-warn">被打断</span>}

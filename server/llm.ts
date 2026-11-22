@@ -689,6 +689,42 @@ async function* mockReply(opts: ChatOptions): AsyncGenerator<ChatChunk> {
     return;
   }
 
+  // 模拟狼人杀：法官主持人和 AI 玩家
+  if (system.includes('狼人杀的法官主持人')) {
+    await sleep(60, opts.signal);
+    yield { content: `（模拟主持人）各位注意——${last}` };
+    return;
+  }
+  if (system.includes('你正在和朋友们玩一局狼人杀')) {
+    await sleep(40, opts.signal);
+    const me = Number(system.match(/你是 (\d+)号/)?.[1] ?? 0);
+    const mates = [...(system.match(/你的狼队友：([^。]+)。/)?.[1] ?? '').matchAll(/(\d+)号/g)].map((m) => Number(m[1]));
+    const options = [...(last.match(/可选：([^\n]+)/)?.[1] ?? '').matchAll(/(\d+)号/g)].map((m) => Number(m[1]));
+    const pick = (list: number[]) => list[Math.floor(Math.random() * list.length)];
+    const text = (() => {
+      if (last.includes('【任务：是否上警】')) return Math.random() < 0.4 ? '【选择:上警】' : '【选择:不上警】';
+      if (last.includes('【任务：女巫用药】')) return last.includes('可以用解药') && Math.random() < 0.6 ? '【救】' : options.length && Math.random() < 0.3 ? `【毒:${pick(options)}号】` : '【不用药】';
+      if (last.includes('【任务：选择】')) {
+        if (last.includes('不选') && Math.random() < 0.1) return '【选择:不选】\n（模拟）再看看。';
+        return options.length ? `【选择:${pick(options)}号】\n（模拟）直觉。` : '【选择:不选】';
+      }
+      if (last.includes('【任务：狼人夜聊】')) {
+        const target = pick(options.filter((n) => n !== me && !mates.includes(n))) ?? pick(options);
+        return `（模拟狼人）今晚刀 ${target} 号吧。\n【刀:${target}号】`;
+      }
+      const others = [...(last.match(/存活：([^。]+)。/)?.[1] ?? '').matchAll(/(\d+)号/g)].map((m) => Number(m[1])).filter((n) => n !== me);
+      const suspect = pick(others) ?? 1;
+      let speech = `（模拟玩家 ${me} 号）我是好人，我觉得 ${suspect} 号有点可疑，先听听后面的发言。`;
+      if (last.includes('【自爆') && Math.random() < 0.08) speech += last.includes('【自爆:N号】') ? `\n【自爆:${suspect}号】` : '\n【自爆】';
+      else if (last.includes('【决斗:N号】') && Math.random() < 0.25) speech += `\n【决斗:${suspect}号】`;
+      return speech;
+    })();
+    for (const ch of Array.from(text)) {
+      if (Math.random() < 0.3) await sleep(1, opts.signal);
+      yield { content: ch };
+    }
+    return;
+  }
   // 模拟 PDF 逐页识别（固定流程）
   if (system.includes('只输出一个 JSON 对象')) {
     await sleep(150, opts.signal);

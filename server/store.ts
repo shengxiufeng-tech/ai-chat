@@ -44,6 +44,8 @@ export function normalizeRoom(room: Room): Room {
   for (const m of room.messages) {
     if (m.status === 'streaming') m.status = 'interrupted';
   }
+  // 狼人杀：上次关闭时等人类做的决定作废（重新开始那一步时会再问一次）
+  if (room.werewolf) room.werewolf.pending = null;
   if (room.trpg) {
     room.trpg.assistantLog = room.trpg.assistantLog ?? [];
     room.trpg.sheets = room.trpg.sheets ?? {};

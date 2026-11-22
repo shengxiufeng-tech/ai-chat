@@ -128,7 +128,7 @@ export const RoomList = forwardRef<
                 onDoubleClick={() => startRename(r.id)}
                 title="双击修改房间名"
               >
-                <span className="room-item-icon">{r.mode === 'trpg' ? '🎲' : (r.avatars[0] ?? '💬')}</span>
+                <span className="room-item-icon">{r.mode === 'trpg' ? '🎲' : r.mode === 'werewolf' ? '🐺' : (r.avatars[0] ?? '💬')}</span>
                 <span className="room-item-body">
                   <span className="room-item-title">{query && r.match?.where === 'title' ? highlight(r.title, query) : r.title}</span>
                   <span className="room-item-meta">
@@ -139,7 +139,7 @@ export const RoomList = forwardRef<
                       </span>
                     ) : (
                       <>
-                        {r.mode === 'trpg' ? '跑团' : `${r.participantCount} 位 AI`} · {ago(r.updatedAt)}
+                        {r.mode === 'trpg' ? '跑团' : r.mode === 'werewolf' ? '狼人杀' : `${r.participantCount} 位 AI`} · {ago(r.updatedAt)}
                       </>
                     )}
                   </span>

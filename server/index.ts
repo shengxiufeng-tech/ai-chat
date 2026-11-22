@@ -17,6 +17,7 @@ import { DEFAULT_ROOM_SETTINGS } from '../shared/types.ts';
 import { AccessControl, lanAddresses } from './access.ts';
 import { ImportManager } from './imports.ts';
 import { preparedFromTrpg, ScriptLibrary } from './library.ts';
+import { createWerewolfRoom, resetWerewolf } from './werewolf.ts';
 import { estimateTokens } from './context.ts';
 import { completeChat, completeChatWithUsage, listModels, primeModelCache, type ChatMessage } from './llm.ts';
 import { BUILTIN_TEMPLATES, ROOM_PRESETS } from './presets.ts';
@@ -548,6 +549,16 @@ app.post(
       store.addRoom(room);
       return room;
     }
+    if (b.mode === 'werewolf') {
+      let room: Room;
+      try {
+        room = createWerewolfRoom(b.werewolf ?? {}, store.getSettings().defaultModel);
+      } catch (err) {
+        throw new HttpError(400, err instanceof Error ? err.message : String(err));
+      }
+      store.addRoom(room);
+      return room;
+    }
     const preset = ROOM_PRESETS.find((p) => p.id === b.presetId) ?? ROOM_PRESETS.find((p) => p.id === 'blank')!;
     const now = Date.now();
     const room: Room = {
@@ -924,6 +935,55 @@ app.get('/api/rooms/:id/events', (req, res) => {
     unsubscribe();
   });
 });
+
+// ---------------- 狼人杀 ----------------
+
+function getWerewolfRoom(id: string) {
+  const room = getRoom(id);
+  if (room.mode !== 'werewolf' || !room.werewolf) throw new HttpError(400, '这不是狼人杀房间');
+  return room as Room & { werewolf: NonNullable<Room['werewolf']> };
+}
+
+app.post(
+  '/api/rooms/:id/werewolf/act',
+  runnerAction((req, id) => {
+    getWerewolfRoom(id);
+    const b = req.body ?? {};
+    runners.get(id).werewolfAnswer(String(b.id ?? ''), b.answer ?? {});
+    return { ok: true };
+  }),
+);
+
+app.patch(
+  '/api/rooms/:id/werewolf',
+  h((req) => {
+    const room = getWerewolfRoom(param(req, 'id'));
+    const b = req.body ?? {};
+    const ww = room.werewolf;
+    if (b.narration === 'ai' || b.narration === 'fixed') ww.narration = b.narration;
+    if (typeof b.narratorModel === 'string') ww.narratorModel = b.narratorModel.trim();
+    if (typeof b.showRoles === 'boolean') ww.showRoles = b.showRoles;
+    if (typeof b.pace === 'number') ww.pace = Math.max(0, Math.min(5000, Math.round(b.pace)));
+    store.touchRoom(room.id, { immediate: true });
+    runners.get(room.id).emitRoomMeta();
+    return { ok: true };
+  }),
+);
+
+/** 再来一局：同样的玩家和板子，重新发身份 */
+app.post(
+  '/api/rooms/:id/werewolf/restart',
+  h((req) => {
+    const room = getWerewolfRoom(param(req, 'id'));
+    const runner = runners.get(room.id);
+    runner.stop();
+    resetWerewolf(room);
+    store.touchRoom(room.id, { immediate: true });
+    runner.emit({ type: 'messages_cleared' });
+    runner.emitRoomMeta();
+    return { ok: true };
+  }),
+);
 
 // ---------------- 前端页面 ----------------
 

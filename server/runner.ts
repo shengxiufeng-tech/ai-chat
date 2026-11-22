@@ -30,6 +30,7 @@ import {
   usableHistory,
 } from './prompt.ts';
 import { newId, type Store } from './store.ts';
+import { WerewolfGame, type WwAnswer } from './werewolf.ts';
 
 type Listener = (ev: RoomEvent) => void;
 
@@ -57,6 +58,9 @@ export class RoomRunner {
   private kpChain = 0;
   /** 已经提示过「上下文被裁剪」的 参与者:模型 */
   private trimNotified = new Set<string>();
+  /** 狼人杀：对局控制和正在发言的玩家 */
+  private wwGame?: WerewolfGame;
+  private wwGenerating: { messageId: string; participantId: string } | null = null;
 
   constructor(
     private roomId: string,
@@ -91,7 +95,7 @@ export class RoomRunner {
       status: this.status,
       generating: this.current
         ? { messageId: this.current.messageId, participantId: this.current.participantId }
-        : null,
+        : this.wwGenerating,
       picking: this.picking,
       aiTurnsSinceHuman: this.aiTurnsSinceHuman,
     };
@@ -113,8 +117,43 @@ export class RoomRunner {
 
   // ---------- 对外操作 ----------
 
+  /** 狼人杀的对局控制（第一次用到时创建） */
+  private werewolf(): WerewolfGame {
+    this.wwGame ??= new WerewolfGame({
+      roomId: this.roomId,
+      store: this.store,
+      room: () => this.room,
+      emit: (ev) => this.emit(ev),
+      emitRoomMeta: () => this.emitRoomMeta(),
+      setGenerating: (g) => {
+        this.wwGenerating = g;
+        this.emitState();
+      },
+      notice: (text, level) => this.notice(text, level),
+      isRunning: () => this.status === 'running',
+      stopped: () => {
+        this.status = 'paused';
+        this.emitState();
+      },
+    });
+    return this.wwGame;
+  }
+
+  /** 狼人杀：人类玩家提交决定 */
+  werewolfAnswer(id: string, answer: WwAnswer) {
+    if (this.room.mode !== 'werewolf') throw new Error('这不是狼人杀房间');
+    this.werewolf().answer(id, answer);
+  }
+
   /** 开始 / 继续自动对话 */
   run() {
+    if (this.room.mode === 'werewolf') {
+      if (this.room.werewolf?.phase === 'end') throw new Error('这局已经结束了，可以点「再来一局」');
+      this.status = 'running';
+      this.emitState();
+      this.werewolf().start();
+      return;
+    }
     if (this.room.mode === 'trpg') {
       throw new Error('跑团模式由你的行动推动：描述你要做什么，守秘人就会回应');
     }
@@ -143,10 +182,12 @@ export class RoomRunner {
   stop() {
     this.pause();
     this.current?.controller.abort();
+    this.wwGame?.abort();
   }
 
   /** 让某位参与者（或按规则自动选的下一位）说一句 */
   requestTurn(participantId?: string) {
+    if (this.room.mode === 'werewolf') throw new Error('狼人杀由法官按顺序安排发言，点「开始」或「继续」');
     if (participantId && !this.room.participants.some((p) => p.id === participantId)) {
       throw new Error('找不到这个角色');
     }

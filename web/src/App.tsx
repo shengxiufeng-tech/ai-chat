@@ -1,4 +1,4 @@
-import { Dices, FileUp, Menu, Monitor, Moon, Plus, Settings, Sparkles, Sun } from 'lucide-react';
+import { Dices, FileUp, Menu, Monitor, Moon, Plus, Settings, Sparkles, Sun, Users } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Room, RoomMode, RoomSummary } from '../../shared/types';
 import { get, post } from './api';
@@ -232,6 +232,13 @@ export default function App() {
                 </div>
                 <h3>跑团（COC 7）</h3>
                 <p>AI 当守秘人，程序掷骰，带角色卡和规则助手，适合完全没玩过的新手。</p>
+              </button>
+              <button className="welcome-card" onClick={() => setNewRoom('werewolf')}>
+                <div className="welcome-card-icon">
+                  <Users />
+                </div>
+                <h3>狼人杀</h3>
+                <p>程序当法官，AI 们发言、伪装、投票。你可以加入一局，也可以旁观 AI 互相推理。</p>
               </button>
             </div>
             <button className="btn btn-ghost" onClick={() => setShowSettings(true)}>

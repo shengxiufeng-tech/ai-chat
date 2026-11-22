@@ -15,6 +15,9 @@ export function ParticipantPanel({ room, runner }: { room: Room; runner: RunnerS
   const [adding, setAdding] = useState(false);
   const base = `/rooms/${room.id}/participants`;
   const trpg = room.mode === 'trpg';
+  const ww = room.mode === 'werewolf';
+  // 跑团和狼人杀的角色是固定的：不能增删、排序
+  const fixed = trpg || ww;
 
   return (
     <div className="panel-section">
@@ -49,17 +52,19 @@ export function ParticipantPanel({ room, runner }: { room: Room; runner: RunnerS
                 </div>
               </div>
               <div className="participant-actions">
-                <button
-                  className="icon-btn sm"
-                  title="让 TA 现在说一句"
-                  onClick={() => attempt(() => post(`/rooms/${room.id}/turn`, { participantId: p.id }))}
-                >
-                  <Megaphone />
-                </button>
+                {!ww && (
+                  <button
+                    className="icon-btn sm"
+                    title="让 TA 现在说一句"
+                    onClick={() => attempt(() => post(`/rooms/${room.id}/turn`, { participantId: p.id }))}
+                  >
+                    <Megaphone />
+                  </button>
+                )}
                 <button className="icon-btn sm" title="编辑" onClick={() => setEditing(p)}>
                   <Pencil />
                 </button>
-                {!trpg && (
+                {!fixed && (
                   <>
                     <Switch
                       checked={p.enabled}
@@ -89,12 +94,13 @@ export function ParticipantPanel({ room, runner }: { room: Room; runner: RunnerS
           );
         })}
       </ul>
-      {!trpg && (
+      {!fixed && (
         <button className="add-btn" onClick={() => setAdding(true)}>
           <UserPlus /> 添加 AI 角色
         </button>
       )}
       {trpg && <p className="hint">守秘人和 AI 队友的模型、思考强度、性格都可以在这里修改。</p>}
+      {ww && <p className="hint">每个座位的 AI 都可以换模型、思考强度和性格，从下一次发言开始生效。座位和身份不会变。</p>}
 
       {adding && (
         <AddParticipantModal
@@ -193,6 +199,7 @@ function ParticipantEditor({
   const set = <K extends keyof Participant>(k: K, v: Participant[K]) => setD((x) => ({ ...x, [k]: v }));
   const url = `/rooms/${room.id}/participants/${participant.id}`;
   const trpg = room.mode === 'trpg';
+  const ww = room.mode === 'werewolf';
   const humanlike = room.settings.promptMode === 'humanlike';
 
   const planner = d.planner ?? { enabled: false, model: '', reasoningEffort: '' };
@@ -253,7 +260,7 @@ function ParticipantEditor({
       size="wide"
       footer={
         <>
-          {!trpg && (
+          {!trpg && !ww && (
             <>
               <button className="btn btn-danger" onClick={remove}>
                 <Trash2 /> 移出房间
@@ -300,32 +307,34 @@ function ParticipantEditor({
             <EffortPicker model={d.model} value={d.reasoningEffort} onChange={(v) => set('reasoningEffort', v)} />
           </Field>
         </div>
-        <div className="span-2 planner-box">
-          <ToggleRow
-            label="先让另一个模型构思"
-            hint="构思模型先想清楚这一轮要说什么（剧情、逻辑、观点、规则），再由上面的模型照着写成文字。适合「逻辑强」配「文笔好」的组合。每轮会多一次模型调用，也会慢一些。"
-            checked={planner.enabled}
-            onChange={(v) => setPlanner({ enabled: v, model: planner.model || (v ? d.model : '') })}
-          />
-          {planner.enabled && (
-            <div className="form-stack" style={{ gap: 12, marginTop: 10 }}>
-              <Field label="构思模型" hint="（建议用逻辑最强的模型）">
-                <ModelInput value={planner.model} onChange={(v) => setPlanner({ model: v })} showStatus={false} />
-              </Field>
-              <Field label="构思模型的思考强度">
-                <EffortPicker model={planner.model} value={planner.reasoningEffort} onChange={(v) => setPlanner({ reasoningEffort: v })} />
-              </Field>
-              <span className="hint">
-                {planner.model && planner.model === d.model
-                  ? '⚠️ 构思和执笔现在是同一个模型。把上面的「执笔模型」换成文笔好的模型，这个功能才有意义。'
-                  : participant.role === 'kp'
-                    ? '检定、数值、笔记等指令由构思模型决定。构思会提到剧本秘密，消息里的「构思」默认收起，标着「可能剧透」。'
-                    : '构思内容会折叠显示在消息上方，其他角色看不到。'}
-              </span>
-            </div>
-          )}
-        </div>
-        {!humanlike && participant.role !== 'kp' && (
+        {!ww && (
+          <div className="span-2 planner-box">
+            <ToggleRow
+              label="先让另一个模型构思"
+              hint="构思模型先想清楚这一轮要说什么（剧情、逻辑、观点、规则），再由上面的模型照着写成文字。适合「逻辑强」配「文笔好」的组合。每轮会多一次模型调用，也会慢一些。"
+              checked={planner.enabled}
+              onChange={(v) => setPlanner({ enabled: v, model: planner.model || (v ? d.model : '') })}
+            />
+            {planner.enabled && (
+              <div className="form-stack" style={{ gap: 12, marginTop: 10 }}>
+                <Field label="构思模型" hint="（建议用逻辑最强的模型）">
+                  <ModelInput value={planner.model} onChange={(v) => setPlanner({ model: v })} showStatus={false} />
+                </Field>
+                <Field label="构思模型的思考强度">
+                  <EffortPicker model={planner.model} value={planner.reasoningEffort} onChange={(v) => setPlanner({ reasoningEffort: v })} />
+                </Field>
+                <span className="hint">
+                  {planner.model && planner.model === d.model
+                    ? '⚠️ 构思和执笔现在是同一个模型。把上面的「执笔模型」换成文笔好的模型，这个功能才有意义。'
+                    : participant.role === 'kp'
+                      ? '检定、数值、笔记等指令由构思模型决定。构思会提到剧本秘密，消息里的「构思」默认收起，标着「可能剧透」。'
+                      : '构思内容会折叠显示在消息上方，其他角色看不到。'}
+                </span>
+              </div>
+            )}
+          </div>
+        )}
+        {!humanlike && !ww && participant.role !== 'kp' && (
           <div className="span-2">
             <Field label="一句话简介" hint="（其他角色能看到，让大家知道 TA 是谁）">
               <input value={d.bio} onChange={(e) => set('bio', e.target.value)} placeholder="例如：爱追问的哲学家" />
@@ -333,7 +342,7 @@ function ParticipantEditor({
           </div>
         )}
         <div className="span-2">
-          <Field label={participant.role === 'kp' ? '主持风格' : participant.role === 'player' ? '性格' : '人设'} hint={personaHint}>
+          <Field label={participant.role === 'kp' ? '主持风格' : participant.role === 'player' || ww ? '性格' : '人设'} hint={ww ? '（影响 TA 的说话风格，不影响身份和策略）' : personaHint}>
             <textarea
               rows={6}
               value={d.persona}

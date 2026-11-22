@@ -1,4 +1,4 @@
-import { Dices, MessagesSquare, Plus } from 'lucide-react';
+import { Dices, MessagesSquare, Plus, Users } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import type { AppSettings, Room, RoomMode, RoomPreset, TrpgCreateOptions } from '../../../shared/types';
 import { get, post } from '../api';
@@ -9,6 +9,7 @@ import { Modal } from './Modal';
 import { ModelInput } from './ModelInput';
 import { clearPdfImport, ScriptImport } from './ScriptImport';
 import { Field, Segmented, ToggleRow } from './ui';
+import { defaultWwForm, WerewolfSetupForm, wwFormProblem, wwPayload, type WwForm } from './WerewolfSetupForm';
 
 const PRESET_ICONS: Record<string, string> = {
   roundtable: '🏛️',
@@ -61,6 +62,7 @@ export function NewRoomModal({
     memo: true,
     humanName: '我',
   });
+  const [w, setW] = useState<WwForm>(() => defaultWwForm(''));
   const setTrpg = <K extends keyof TrpgCreateOptions>(k: K, v: TrpgCreateOptions[K]) => setT((x) => ({ ...x, [k]: v }));
 
   useEffect(() => {
@@ -75,6 +77,7 @@ export function NewRoomModal({
       if (!s) return;
       setModel(s.defaultModel);
       setT((x) => ({ ...x, kpModel: x.kpModel || s.defaultModel, teammateModel: x.teammateModel || s.defaultModel }));
+      setW((x) => ({ ...x, model: x.model || s.defaultModel, narratorModel: x.narratorModel || s.defaultModel }));
     });
   }, []);
 
@@ -89,7 +92,9 @@ export function NewRoomModal({
     const room = await attempt(() =>
       mode === 'trpg'
         ? post<Room>('/rooms', { mode: 'trpg', trpg: t })
-        : post<Room>('/rooms', { presetId, title, scenario, model }),
+        : mode === 'werewolf'
+          ? post<Room>('/rooms', { mode: 'werewolf', werewolf: wwPayload(w) })
+          : post<Room>('/rooms', { presetId, title, scenario, model }),
     );
     setCreating(false);
     if (room) {
@@ -100,7 +105,7 @@ export function NewRoomModal({
   };
 
   const preset = presets.find((p) => p.id === presetId);
-  const invalid = mode === 'trpg' && t.scenarioId === 'custom' && !t.prepared && !t.customScript?.trim();
+  const invalid = (mode === 'trpg' && t.scenarioId === 'custom' && !t.prepared && !t.customScript?.trim()) || (mode === 'werewolf' && !!wwFormProblem(w));
 
   return (
     <Modal
@@ -115,7 +120,7 @@ export function NewRoomModal({
             取消
           </button>
           <button className="btn btn-primary" onClick={create} disabled={creating || invalid}>
-            {mode === 'trpg' ? '创建跑团房间' : '创建'}
+            {mode === 'trpg' ? '创建跑团房间' : mode === 'werewolf' ? '创建狼人杀房间' : '创建'}
           </button>
         </>
       }
@@ -128,10 +133,13 @@ export function NewRoomModal({
           options={[
             { value: 'chat', label: <><MessagesSquare /> 多人对话</> },
             { value: 'trpg', label: <><Dices /> 跑团（COC 7）</> },
+            { value: 'werewolf', label: <><Users /> 狼人杀</> },
           ]}
         />
 
-        {mode === 'chat' ? (
+        {mode === 'werewolf' ? (
+          <WerewolfSetupForm value={w} onChange={setW} />
+        ) : mode === 'chat' ? (
           <>
             <div className="card-grid">
               {presets.map((p) => (

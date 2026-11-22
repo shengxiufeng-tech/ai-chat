@@ -41,8 +41,10 @@ import { RoomSettingsPanel } from './RoomSettingsPanel';
 import { SheetPanel } from './SheetPanel';
 import { TrpgSettingsPanel } from './TrpgSettingsPanel';
 import { TrpgSetup } from './TrpgSetup';
+import { canSee, viewerOf } from '../../../shared/werewolf';
+import { restartWerewolf, SeatBar, WwActionPanel, WwCard, WwInfoPanel, WwSettingsPanel, WwSetupCard, wwStatus } from './Werewolf';
 
-type Tab = 'participants' | 'settings' | 'sheet' | 'notes' | 'assistant' | 'trpg-settings';
+type Tab = 'participants' | 'settings' | 'sheet' | 'notes' | 'assistant' | 'trpg-settings' | 'ww-info' | 'ww-settings';
 
 export function RoomView({
   roomId,
@@ -86,7 +88,7 @@ export function RoomView({
   const [showJump, setShowJump] = useState(false);
   const followStream = useFollowStream();
   const trpg = room?.mode === 'trpg';
-  const activeTab: Tab = tab ?? (trpg ? 'sheet' : 'participants');
+  const activeTab: Tab = tab ?? (trpg ? 'sheet' : room?.mode === 'werewolf' ? 'ww-info' : 'participants');
 
   // 房间名、角色变化时通知侧边栏刷新
   const metaKey = room ? `${room.title}|${room.participants.map((p) => p.avatar).join('')}` : '';
@@ -203,7 +205,20 @@ export function RoomView({
   if (runner?.picking) statusText = 'AI 主持人在选下一位…';
   else if (speaker) statusText = `${speaker.name} 正在${speaker.role === 'kp' ? '描述' : '发言'}…`;
 
-  const tabs: { key: Tab; label: string; title?: string; icon: ReactNode }[] = trpg
+  // 狼人杀：只显示你能看到的消息
+  const ww = room.mode === 'werewolf' ? room.werewolf : undefined;
+  if (ww) statusText = wwStatus(ww, runner, speaker || undefined);
+  const viewer = ww ? viewerOf(ww) : null;
+  const visibleMessages = viewer ? room.messages.filter((m) => canSee(m.visibility, viewer)) : room.messages;
+  const myTurn = !!ww?.pending && ww.pending.seat === ww.humanSeat;
+
+  const tabs: { key: Tab; label: string; title?: string; icon: ReactNode }[] = ww
+    ? [
+        { key: 'ww-info', label: '对局', icon: <BookUser /> },
+        { key: 'participants', label: 'AI', icon: <Users /> },
+        { key: 'ww-settings', label: '设置', icon: <Settings2 /> },
+      ]
+    : trpg
     ? [
         { key: 'sheet', label: '调查员', icon: <BookUser /> },
         { key: 'notes', label: t?.notes?.length ? `笔记 ${t.notes.length}` : '笔记', icon: <BookMarked /> },
@@ -260,7 +275,22 @@ export function RoomView({
             {room.scenario && room.settings.promptMode !== 'humanlike' && <div className="room-subtitle">{room.scenario}</div>}
           </div>
           <div className="room-controls">
-            {!trpg && !manual &&
+            {ww && ww.phase !== 'end' && !running && (
+              <button className="btn btn-primary" onClick={() => attempt(() => post(`${base}/run`))}>
+                <Play /> {ww.phase === 'setup' ? '开始游戏' : '继续'}
+              </button>
+            )}
+            {ww && ww.phase !== 'end' && running && !generating && (
+              <button className="btn" onClick={() => attempt(() => post(`${base}/pause`))} title="当前这一步做完后暂停">
+                <Pause /> 暂停
+              </button>
+            )}
+            {ww && ww.phase === 'end' && (
+              <button className="btn btn-primary" onClick={() => void restartWerewolf(room)}>
+                <Play /> 再来一局
+              </button>
+            )}
+            {!trpg && !ww && !manual &&
               (running ? (
                 <button className="btn" onClick={() => attempt(() => post(`${base}/pause`))} title="当前这句说完后暂停">
                   <Pause /> 暂停
@@ -275,7 +305,7 @@ export function RoomView({
                   </span>
                 </button>
               ))}
-            {!trpg && (
+            {!trpg && !ww && (
               <button
                 className="icon-btn"
                 onClick={() => attempt(() => post(`${base}/turn`))}
@@ -334,6 +364,16 @@ export function RoomView({
                   >
                     <Share2 /> 导出与分享
                   </button>
+                  {ww ? (
+                    <button
+                      onClick={() => {
+                        setMenuOpen(false);
+                        void restartWerewolf(room);
+                      }}
+                    >
+                      <Eraser /> 再来一局
+                    </button>
+                  ) : (
                   <button
                     onClick={async () => {
                       setMenuOpen(false);
@@ -348,6 +388,7 @@ export function RoomView({
                   >
                     <Eraser /> {trpg ? '重新开始游戏' : '清空对话'}
                   </button>
+                  )}
                   <div className="menu-sep" />
                   <button
                     className="danger"
@@ -367,7 +408,7 @@ export function RoomView({
           </div>
         </header>
 
-        <CastBar room={room} runner={runner} />
+        {ww ? <SeatBar room={room} runner={runner} /> : <CastBar room={room} runner={runner} />}
 
         <div className="messages-wrap">
           <div
@@ -384,7 +425,9 @@ export function RoomView({
               setShowJump(!nearBottom.current);
             }}
           >
-            {needSetup ? (
+            {ww && ww.phase === 'setup' && room.messages.length === 0 ? (
+              <WwSetupCard room={room} onStart={() => void attempt(() => post(`${base}/run`))} />
+            ) : needSetup ? (
               <TrpgSetup room={room} onCreate={() => setWizard(true)} />
             ) : room.messages.length === 0 ? (
               <div className="empty">
@@ -401,11 +444,14 @@ export function RoomView({
               </div>
             ) : (
               <div className="messages-inner">
-                {room.messages.map((m, i) => (
+                {visibleMessages.map((m, i) =>
+                  m.kind === 'ww' ? (
+                    <WwCard key={m.id} room={room} m={m} />
+                  ) : (
                   <MessageItem
                     key={m.id}
                     message={m}
-                    isLast={i === room.messages.length - 1}
+                    isLast={!ww && i === visibleMessages.length - 1}
                     isKp={!!kpId && m.participantId === kpId}
                   roomId={room.id}
                     playerName={trpg ? t?.sheets.player?.name : undefined}
@@ -418,7 +464,8 @@ export function RoomView({
                     onOpenNotes={onOpenNotes}
                     hideNames={m.participantId ? namesById.get(m.participantId) : undefined}
                   />
-                ))}
+                  ),
+                )}
               </div>
             )}
           </div>
@@ -429,6 +476,27 @@ export function RoomView({
           )}
         </div>
 
+        {ww ? (
+          <div className="ww-footer">
+            {myTurn ? (
+              <WwActionPanel room={room} />
+            ) : (
+              <div className="ww-wait">
+                {ww.phase === 'end'
+                  ? '这局结束了。可以在右侧「对局」页看所有人的身份和每晚发生的事，或者点右上角「再来一局」。'
+                  : ww.humanSeat == null
+                    ? '你在旁观这一局。'
+                    : !ww.seats.find((x) => x.seat === ww.humanSeat)?.alive
+                      ? '你已经出局了，现在是上帝视角：能看到所有人的身份和夜里发生的事。'
+                      : ww.phase === 'setup'
+                        ? '点「开始游戏」发身份入夜。'
+                        : running
+                          ? '还没轮到你，先听听大家怎么说。'
+                          : '游戏暂停了，点右上角「继续」。'}
+              </div>
+            )}
+          </div>
+        ) : (
         <Composer
           room={room}
           runner={runner}
@@ -439,6 +507,7 @@ export function RoomView({
             return !!(await attempt(() => post(`${base}/messages`, { content, ...opts })));
           }}
         />
+        )}
       </div>
 
       {panelOpen && <div className="panel-backdrop" onClick={() => setPanelOpen(false)} />}
@@ -461,10 +530,12 @@ export function RoomView({
           {activeTab === 'notes' && trpg && <NotesPanel room={room} />}
           {activeTab === 'assistant' && trpg && <AssistantPanel room={room} />}
           {activeTab === 'trpg-settings' && trpg && <TrpgSettingsPanel room={room} />}
+          {activeTab === 'ww-info' && ww && <WwInfoPanel room={room} />}
+          {activeTab === 'ww-settings' && ww && <WwSettingsPanel room={room} />}
         </aside>
       )}
 
-      {exporting && <ExportModal room={room} onClose={() => setExporting(false)} />}
+      {exporting && <ExportModal room={room} visibleMessages={viewer ? visibleMessages : undefined} onClose={() => setExporting(false)} />}
       {wizard && <CharacterWizard room={room} onClose={() => setWizard(false)} />}
     </div>
   );

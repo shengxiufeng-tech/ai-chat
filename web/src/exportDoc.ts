@@ -20,6 +20,18 @@ export function displayContent(room: Room, m: Message) {
   return isKpMessage(room, m) ? kpDisplayText(m.content) : m.content.trim();
 }
 
+/** 狼人杀：不是所有人都能看到的消息，导出时注明 */
+export function visibilityTag(m: Message) {
+  const v = m.visibility;
+  if (!v || v === 'public') return '';
+  if (v === 'wolves') return '（狼队频道）';
+  if (v === 'god') return '（上帝视角）';
+  return `（${v.slice(5)}号的私密信息）`;
+}
+
+const SYSTEM_KINDS = new Set(['roll', 'note', 'handout', 'ww']);
+const kindIcon = (m: Message) => (m.kind === 'note' ? '📒' : m.kind === 'handout' ? '📜' : m.kind === 'ww' ? '⚖️' : '🎲');
+
 export function speakerOf(room: Room, m: Message) {
   if (m.role === 'human' && room.mode === 'trpg' && !m.ooc) return room.trpg?.sheets.player?.name ?? m.speakerName;
   return m.speakerName;
@@ -43,13 +55,13 @@ export function toMarkdown(room: Room, messages: Message[], o: ExportOptions) {
   }
   lines.push('---', '');
   for (const m of messages) {
-    if (m.kind === 'roll' || m.kind === 'note' || m.kind === 'handout') {
-      if (o.rolls) lines.push(`> ${m.kind === 'note' ? '📒' : m.kind === 'handout' ? '📜' : '🎲'} ${m.content}`, '');
+    if (m.kind && SYSTEM_KINDS.has(m.kind)) {
+      if (o.rolls) lines.push(`> ${kindIcon(m)} ${visibilityTag(m)}${m.content}`, '');
       continue;
     }
     const text = displayContent(room, m);
     if (!text) continue;
-    const who = m.role === 'human' ? `🧑 ${speakerOf(room, m)}${m.ooc ? '（场外）' : ''}` : `${m.avatar ?? '🤖'} ${m.speakerName}`;
+    const who = `${m.role === 'human' ? `🧑 ${speakerOf(room, m)}${m.ooc ? '（场外）' : ''}` : `${m.avatar ?? '🤖'} ${m.speakerName}`}${visibilityTag(m)}`;
     const meta = [
       o.modelInfo && m.model ? `\`${m.model}${m.reasoningEffort ? ` · ${effortLabel(m.reasoningEffort)}` : ''}\`` : '',
       o.time ? fmtTime(m.createdAt) : '',
@@ -68,13 +80,13 @@ export function toMarkdown(room: Room, messages: Message[], o: ExportOptions) {
 export function toPlainText(room: Room, messages: Message[], o: ExportOptions) {
   const out = [`【${room.title}】`, ''];
   for (const m of messages) {
-    if (m.kind === 'roll' || m.kind === 'note' || m.kind === 'handout') {
-      if (o.rolls) out.push(`${m.kind === 'note' ? '📒' : m.kind === 'handout' ? '📜' : '🎲'} ${m.content}`, '');
+    if (m.kind && SYSTEM_KINDS.has(m.kind)) {
+      if (o.rolls) out.push(`${kindIcon(m)} ${visibilityTag(m)}${m.content}`, '');
       continue;
     }
     const text = displayContent(room, m);
     if (!text) continue;
-    out.push(`${speakerOf(room, m)}${m.ooc ? '（场外）' : ''}：${text}`, '');
+    out.push(`${speakerOf(room, m)}${m.ooc ? '（场外）' : ''}${visibilityTag(m)}：${text}`, '');
   }
   return out.join('\n').trim();
 }
