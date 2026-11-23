@@ -7,7 +7,7 @@ import { test } from 'node:test';
 import { BOARDS, isWolf, type WerewolfState } from '../shared/werewolf.ts';
 import { RunnerManager } from './runner.ts';
 import { Store } from './store.ts';
-import { createWerewolfRoom, humanPrompt, parseChoice, parseSpeechActions, playerMessages, type WerewolfCreateOptions } from './werewolf.ts';
+import { createWerewolfRoom, humanPrompt, parseChoice, resetWerewolf, parseSpeechActions, playerMessages, type WerewolfCreateOptions } from './werewolf.ts';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -192,6 +192,51 @@ test('推理模型的发言：记录思考过程和用时，写正文时把用�
     assert.match(m!.reasoning ?? '', /模拟思考/);
     assert.ok((m!.thinkMs ?? 0) >= 1000, `思考用时 ${m!.thinkMs}`);
     assert.ok(deltas.includes(m!.thinkMs!), '用时随增量发给了前端');
+  } finally {
+    await ctx.cleanup();
+  }
+});
+
+test('AI 知道公开的大局：狼人总数、公开的身份、还剩几名狼；狼人知道队友谁还活着', async () => {
+  const ctx = setup({ boardId: 'nine', join: false, sheriff: false });
+  try {
+    const ww = ctx.room.werewolf!;
+    Object.assign(ww, { day: 3, phase: 'night' });
+    const wolves = ww.seats.filter((s) => isWolf(s.role));
+    const villager = ww.seats.find((s) => s.role === 'villager')!;
+    const hunter = ww.seats.find((s) => s.role === 'hunter')!;
+    // 一只狼自爆（公开），一个猎人开枪（公开），一个平民夜里出局（不公开）
+    Object.assign(wolves[0], { alive: false, death: { day: 1, cause: 'explode' }, revealed: 'role' });
+    Object.assign(hunter, { alive: false, death: { day: 2, cause: 'wolf' }, revealed: 'role' });
+    Object.assign(villager, { alive: false, death: { day: 2, cause: 'vote' } });
+    const last = (seat: number) => playerMessages(ctx.room, seat, '【任务：狼人夜聊】').at(-1)!.content;
+
+    const otherVillager = ww.seats.find((s) => s.role === 'villager' && s.alive)!;
+    const v = last(otherVillager.seat);
+    assert.match(v, /本局狼人阵营一共 3 名/);
+    assert.match(v, new RegExp(`${wolves[0].seat}号 是狼人（已出局）`));
+    assert.match(v, new RegExp(`${hunter.seat}号 是猎人（已出局）`));
+    assert.match(v, new RegExp(`${villager.seat}号 出局时没有公开身份`));
+    assert.match(v, /确认出局的狼人 1 名/);
+    assert.match(v, /场上还剩 1~2 名狼人/, '出局的平民身份没公开，所以是 1~2 名');
+    assert.doesNotMatch(v, /狼队现在/, '好人不知道狼队的情况');
+
+    const w = last(wolves[1].seat);
+    assert.match(w, /狼队现在还活着 2 人/);
+    assert.match(w, new RegExp(`已经出局的队友：${wolves[0].seat}号`));
+    assert.match(w, /场上一共还有 2 名狼人/);
+
+    const seer = ww.seats.find((s) => s.role === 'seer')!;
+    ww.nights = [{ day: 1, check: { target: wolves[1].seat, wolf: true }, deaths: [] }];
+    assert.match(last(seer.seat), new RegExp(`你验出的狼人里还活着的：${wolves[1].seat}号`));
+
+    // 你在座位上做的标记只是自己的猜测，AI 看不到；再来一局时清空
+    const before = last(otherVillager.seat);
+    ww.guesses = { [wolves[1].seat]: 'wolf', [seer.seat]: 'seer' };
+    assert.equal(last(otherVillager.seat), before);
+    resetWerewolf(ctx.room);
+    assert.deepEqual(ctx.room.werewolf!.guesses, {});
+    assert.ok(ctx.room.werewolf!.seats.every((s) => !s.revealed), '公开的身份也清空');
   } finally {
     await ctx.cleanup();
   }

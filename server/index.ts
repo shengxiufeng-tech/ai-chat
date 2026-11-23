@@ -18,6 +18,7 @@ import { AccessControl, lanAddresses } from './access.ts';
 import { ImportManager } from './imports.ts';
 import { preparedFromTrpg, ScriptLibrary } from './library.ts';
 import { createWerewolfRoom, resetWerewolf } from './werewolf.ts';
+import { ROLE_INFO } from '../shared/werewolf.ts';
 import { estimateTokens } from './context.ts';
 import { completeChat, completeChatWithUsage, listModels, primeModelCache, type ChatMessage } from './llm.ts';
 import { BUILTIN_TEMPLATES, ROOM_PRESETS } from './presets.ts';
@@ -964,6 +965,16 @@ app.patch(
     if (typeof b.narratorModel === 'string') ww.narratorModel = b.narratorModel.trim();
     if (typeof b.showRoles === 'boolean') ww.showRoles = b.showRoles;
     if (typeof b.pace === 'number') ww.pace = Math.max(0, Math.min(5000, Math.round(b.pace)));
+    // 身份标记：只是你的猜测，不会发给 AI
+    if (b.guess && typeof b.guess === 'object') {
+      const seat = Number(b.guess.seat);
+      if (!ww.seats.some((s) => s.seat === seat)) throw new HttpError(400, '没有这个座位');
+      const value = b.guess.value;
+      ww.guesses ??= {};
+      if (value == null) delete ww.guesses[seat];
+      else if (value === 'wolf' || value === 'good' || value in ROLE_INFO) ww.guesses[seat] = value;
+      else throw new HttpError(400, '不认识这个身份');
+    }
     store.touchRoom(room.id, { immediate: true });
     runners.get(room.id).emitRoomMeta();
     return { ok: true };

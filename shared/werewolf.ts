@@ -113,7 +113,12 @@ export interface WwSeat {
   death?: { day: number; cause: DeathCause };
   /** 白痴翻牌后不能投票 */
   idiotRevealed?: boolean;
+  /** 身份已经公开：role 公开了具体角色（开枪、自爆、骑士翻牌），wolf / good 只知道阵营（骑士决斗的结果） */
+  revealed?: 'role' | 'wolf' | 'good';
 }
+
+/** 玩家在座位上做的身份标记（只是猜测，不会发给 AI）：狼人阵营、好人，或者具体角色 */
+export type WwGuess = WwRole | 'wolf' | 'good';
 
 /** 等待处理的一步流程（存在房间里，服务重启后接着做） */
 export type WwTask =
@@ -200,6 +205,19 @@ export interface WerewolfState {
   showRoles: boolean;
   /** 每一步之间停多久（毫秒），让人看得过来 */
   pace: number;
+  /** 你在座位上做的身份标记（座位号 → 猜测） */
+  guesses?: Record<number, WwGuess>;
+}
+
+/** 公开信息里能确定的狼人数量：本局总数、公开确认出局的、场上还剩几名（范围） */
+export function wolfCount(ww: WerewolfState) {
+  const total = ROLE_ORDER.filter(isWolf).reduce((n, r) => n + (ww.roles[r] ?? 0), 0);
+  const deadConfirmed = ww.seats.filter((s) => !s.alive && (s.revealed === 'role' || s.revealed === 'wolf') && isWolf(s.role)).length;
+  // 出局但身份没公开的人里，可能有狼也可能没有
+  const deadUnknown = ww.seats.filter((s) => !s.alive && !s.revealed).length;
+  const max = total - deadConfirmed;
+  const min = Math.max(ww.phase === 'end' ? 0 : 1, max - deadUnknown);
+  return { total, deadConfirmed, min: Math.min(min, max), max };
 }
 
 // ---------------- 发身份 ----------------

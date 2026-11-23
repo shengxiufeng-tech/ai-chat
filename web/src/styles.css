@@ -1715,6 +1715,56 @@ mark {
   white-space: nowrap;
 }
 
+button.seat {
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+.seat.guessable:hover {
+  border-color: var(--text-3);
+}
+
+.seat.picking {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+/* 你的猜测：虚线框，和真实身份区分开 */
+.seat-guess {
+  font-size: 10.5px;
+  white-space: nowrap;
+  color: var(--text-2);
+  padding: 0 4px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 6px;
+}
+
+.seat-pick .seat-guess {
+  margin-top: 2px;
+}
+
+.guess-picker {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 20px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-1);
+  font-size: 13px;
+}
+
+.guess-picker .chip {
+  cursor: pointer;
+  height: 30px;
+  font-size: 13px;
+}
+
+.guess-picker .icon-btn {
+  margin-left: auto;
+}
+
 .ww-phase {
   align-self: center;
   display: inline-flex;
@@ -1993,6 +2043,10 @@ mark {
 @media (max-width: 760px) {
   .seat-bar {
     padding: 6px 10px;
+  }
+
+  .guess-picker {
+    padding: 8px 10px;
   }
 
   .seat {

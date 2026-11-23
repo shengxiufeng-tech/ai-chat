@@ -42,7 +42,7 @@ import { SheetPanel } from './SheetPanel';
 import { TrpgSettingsPanel } from './TrpgSettingsPanel';
 import { TrpgSetup } from './TrpgSetup';
 import { canSee, viewerOf } from '../../../shared/werewolf';
-import { restartWerewolf, SeatBar, WwActionPanel, WwCard, WwInfoPanel, WwSettingsPanel, WwElapsed, WwSetupCard, wwStatus } from './Werewolf';
+import { restartWerewolf, SeatBar, WwActionPanel, WwCard, WwInfoPanel, WwSettingsPanel, WwElapsed, wwElapsedSince, WwSetupCard, wwStatus } from './Werewolf';
 
 type Tab = 'participants' | 'settings' | 'sheet' | 'notes' | 'assistant' | 'trpg-settings' | 'ww-info' | 'ww-settings';
 
@@ -192,7 +192,13 @@ export function RoomView({
   }
 
   const generating = runner?.generating;
-  const speaker = generating && room.participants.find((p) => p.id === generating.participantId);
+  // 狼人杀：还在局中时，看不到的发言（狼人夜聊）不能暴露是谁在说话
+  const ww = room.mode === 'werewolf' ? room.werewolf : undefined;
+  const viewer = ww ? viewerOf(ww) : null;
+  const genMsg = generating && room.messages.find((m) => m.id === generating.messageId);
+  const hiddenSpeaker = !!generating && !!viewer && !viewer.god && (!genMsg || !canSee(genMsg.visibility, viewer));
+  const speaker = generating && !hiddenSpeaker ? room.participants.find((p) => p.id === generating.participantId) : undefined;
+  const shownRunner = hiddenSpeaker && runner ? { ...runner, generating: null } : runner;
   const running = runner?.status === 'running';
   const manual = room.settings.turnMode === 'manual';
   const kpId = room.participants.find((p) => p.role === 'kp')?.id;
@@ -207,9 +213,8 @@ export function RoomView({
   else if (speaker) statusText = `${speaker.name} 正在${speaker.role === 'kp' ? '描述' : '发言'}…`;
 
   // 狼人杀：只显示你能看到的消息
-  const ww = room.mode === 'werewolf' ? room.werewolf : undefined;
-  if (ww) statusText = wwStatus(ww, runner, speaker || undefined);
-  const viewer = ww ? viewerOf(ww) : null;
+  if (ww) statusText = wwStatus(ww, runner, speaker || undefined, viewer ?? undefined);
+  const elapsedSince = ww && viewer ? wwElapsedSince(ww, viewer, room.messages) : undefined;
   const visibleMessages = viewer ? room.messages.filter((m) => canSee(m.visibility, viewer)) : room.messages;
   const myTurn = !!ww?.pending && ww.pending.seat === ww.humanSeat;
   // 思考过程：狼人杀里始终折叠，还在局中时不能展开（AI 的思考会暴露身份）
@@ -272,7 +277,7 @@ export function RoomView({
               <span className={`status-pill ${running ? 'running' : ''} ${generating || runner?.picking ? 'busy' : ''}`}>
                 <span className="dot" />
                 {statusText}
-                {ww?.activityAt && running && !speaker && <WwElapsed since={ww.activityAt} />}
+                {elapsedSince && running && !speaker && <WwElapsed since={elapsedSince} />}
                 {!connected && '（重连中…）'}
               </span>
             </div>
@@ -412,7 +417,7 @@ export function RoomView({
           </div>
         </header>
 
-        {ww ? <SeatBar room={room} runner={runner} /> : <CastBar room={room} runner={runner} />}
+        {ww ? <SeatBar room={room} runner={shownRunner} /> : <CastBar room={room} runner={runner} />}
 
         <div className="messages-wrap">
           <div
@@ -529,7 +534,7 @@ export function RoomView({
               <X />
             </button>
           </div>
-          {activeTab === 'participants' && <ParticipantPanel room={room} runner={runner} />}
+          {activeTab === 'participants' && <ParticipantPanel room={room} runner={shownRunner} />}
           {activeTab === 'settings' && <RoomSettingsPanel room={room} />}
           {activeTab === 'sheet' && trpg && <SheetPanel room={room} onCreate={() => setWizard(true)} />}
           {activeTab === 'notes' && trpg && <NotesPanel room={room} />}

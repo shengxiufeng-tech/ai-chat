@@ -1,5 +1,5 @@
 // 狼人杀的界面部件：座位表、法官消息、轮到你时的操作面板、对局信息、设置
-import { Crown, Eye, Lock, Megaphone, Moon, Play, Send, Skull, Sun, Swords, Users, Vote } from 'lucide-react';
+import { Crown, Eye, Lock, Megaphone, Moon, Play, Send, Skull, Sun, Swords, Users, Vote, X } from 'lucide-react';
 import { useEffect, useState, type CSSProperties } from 'react';
 import {
   DEATH_LABELS,
@@ -12,6 +12,8 @@ import {
   type WerewolfState,
   type WwPending,
   type WwSeat,
+  type WwGuess,
+  type WwViewer,
 } from '../../../shared/werewolf';
 import type { Message, Participant, Room, RunnerState } from '../../../shared/types';
 import { patch, post } from '../api';
@@ -28,17 +30,42 @@ export function roleVisible(ww: WerewolfState, s: WwSeat) {
   if (s.seat === ww.humanSeat) return true;
   if (v.god) return ww.humanSeat != null || ww.showRoles;
   if (v.wolf && isWolf(s.role)) return true;
-  return !!s.idiotRevealed || s.death?.cause === 'explode' || s.death?.cause === 'knight';
+  // 开枪、自爆、骑士翻牌、白痴翻牌：所有人都知道
+  return s.revealed === 'role' || !!s.idiotRevealed || s.death?.cause === 'explode' || s.death?.cause === 'knight';
 }
 
-export function wwStatus(ww: WerewolfState, runner: RunnerState | null, speaker?: Participant) {
+/** 身份标记的选项：狼人 / 好人，再加上本局有的具体角色 */
+const GUESS_INFO: Record<'wolf' | 'good', { icon: string; name: string }> = { wolf: { icon: '🐺', name: '狼人' }, good: { icon: '😇', name: '好人' } };
+const guessInfo = (g: WwGuess) => (g === 'wolf' || g === 'good' ? GUESS_INFO[g] : ROLE_INFO[g]);
+const guessOptions = (ww: WerewolfState): WwGuess[] => [
+  'wolf',
+  'good',
+  ...ROLE_ORDER.filter((r) => r !== 'werewolf' && (ww.roles[r] ?? 0) > 0),
+];
+
+/** 这个座位可以做标记吗：自己、已经知道身份的不用猜 */
+const canGuess = (ww: WerewolfState, s: WwSeat) => ww.phase !== 'setup' && ww.phase !== 'end' && s.seat !== ww.humanSeat && !roleVisible(ww, s);
+
+/** 夜里还在局中的玩家只能看到「天黑请闭眼」：谁在行动、哪些角色还在行动都不能看出来 */
+const nightHidden = (ww: WerewolfState, viewer?: WwViewer) => ww.phase === 'night' && !!viewer && !viewer.god;
+
+export function wwStatus(ww: WerewolfState, runner: RunnerState | null, speaker?: Participant, viewer?: WwViewer) {
   if (ww.phase === 'setup') return '还没开始';
   if (ww.phase === 'end') return `游戏结束 · ${ww.winner === 'wolf' ? '狼人' : '好人'}阵营胜利`;
   if (ww.pending && ww.pending.seat === ww.humanSeat) return '轮到你了';
-  if (speaker) return `${speaker.name} 正在发言…`;
-  if (ww.activity) return ww.activity;
   const when = ww.phase === 'night' ? `第 ${ww.day} 夜` : `第 ${ww.day} 天`;
-  return runner?.status === 'running' ? when : `${when} · 已暂停`;
+  if (runner?.status !== 'running') return `${when} · 已暂停`;
+  // 能看到的发言（狼人看狼队夜聊）照常显示是谁在说
+  if (speaker) return `${speaker.name} 正在发言…`;
+  if (nightHidden(ww, viewer)) return `${when} · 天黑请闭眼`;
+  if (ww.activity) return ww.activity;
+  return when;
+}
+
+/** 状态里的计时从什么时候算起：夜里（还在局中）从入夜算，免得从计时看出每一步的起止 */
+export function wwElapsedSince(ww: WerewolfState, viewer: WwViewer, messages: Message[]) {
+  if (nightHidden(ww, viewer)) return [...messages].reverse().find((m) => m.ww?.type === 'phase' && m.content.includes('天黑'))?.createdAt;
+  return ww.activityAt;
 }
 
 /** 这一步已经等了多久（AI 在后台做决定时没有文字输出，显示时间免得以为卡住了） */
@@ -53,35 +80,78 @@ export function WwElapsed({ since }: { since: number }) {
 export function SeatBar({ room, runner }: { room: Room; runner: RunnerState | null }) {
   const ww = room.werewolf!;
   const speakingId = runner?.generating?.participantId;
+  const [picking, setPicking] = useState<number | null>(null);
+  const pickingSeat = picking != null ? ww.seats.find((s) => s.seat === picking) : undefined;
+  const guess = async (seat: number, value: WwGuess | null) => {
+    setPicking(null);
+    await attempt(() => patch(`/rooms/${room.id}/werewolf`, { guess: { seat, value } }));
+  };
   return (
-    <div className="seat-bar">
-      {ww.seats.map((s) => {
-        const p = room.participants.find((x) => x.id === s.participantId);
-        const show = roleVisible(ww, s);
-        const info = ROLE_INFO[s.role];
-        const speaking = (speakingId && speakingId === s.participantId) || (ww.pending?.seat === s.seat && s.human);
-        return (
-          <div
-            key={s.seat}
-            className={`seat ${s.alive ? '' : 'dead'} ${speaking ? 'speaking' : ''} ${s.human ? 'me' : ''} ${show && isWolf(s.role) ? 'wolf' : ''}`}
-            style={{ '--c': p?.color ?? 'var(--accent)' } as CSSProperties}
-            title={`${seatLabel(s.seat)} ${s.name}${show ? ` · ${info.name}` : ''}${s.alive ? '' : ` · ${DEATH_LABELS[s.death!.cause]}`}${p ? ` · ${p.model}` : ''}`}
-          >
-            <span className="seat-num">{s.seat}</span>
-            <span className="seat-avatar">{s.alive ? s.avatar : <Skull />}</span>
-            <span className="seat-name">
-              {s.human ? '你' : s.name}
-              {ww.sheriff === s.seat && <Crown className="seat-badge" aria-label="警长" />}
-            </span>
-            {show && (
-              <span className="seat-role">
-                {info.icon} {info.name}
+    <>
+      <div className="seat-bar">
+        {ww.seats.map((s) => {
+          const p = room.participants.find((x) => x.id === s.participantId);
+          const show = roleVisible(ww, s);
+          const info = ROLE_INFO[s.role];
+          // 骑士决斗只公开了阵营
+          const team = !show && (s.revealed === 'wolf' || s.revealed === 'good') ? GUESS_INFO[s.revealed] : undefined;
+          const g = !show && !team ? ww.guesses?.[s.seat] : undefined;
+          const guessable = canGuess(ww, s) && !team;
+          const speaking = (speakingId && speakingId === s.participantId) || (ww.pending?.seat === s.seat && s.human);
+          const title = `${seatLabel(s.seat)} ${s.name}${show ? ` · ${info.name}` : team ? ` · ${team.name}` : g ? ` · 你猜是${guessInfo(g).name}` : ''}${s.alive ? '' : ` · ${DEATH_LABELS[s.death!.cause]}`}${p ? ` · ${p.model}` : ''}${guessable ? '（点一下标记你的猜测）' : ''}`;
+          const Tag = guessable ? 'button' : 'div';
+          return (
+            <Tag
+              key={s.seat}
+              {...(guessable ? { type: 'button' as const, onClick: () => setPicking(picking === s.seat ? null : s.seat) } : {})}
+              className={`seat ${s.alive ? '' : 'dead'} ${speaking ? 'speaking' : ''} ${s.human ? 'me' : ''} ${(show && isWolf(s.role)) || s.revealed === 'wolf' ? 'wolf' : ''} ${guessable ? 'guessable' : ''} ${picking === s.seat ? 'picking' : ''}`}
+              style={{ '--c': p?.color ?? 'var(--accent)' } as CSSProperties}
+              title={title}
+            >
+              <span className="seat-num">{s.seat}</span>
+              <span className="seat-avatar">{s.alive ? s.avatar : <Skull />}</span>
+              <span className="seat-name">
+                {s.human ? '你' : s.name}
+                {ww.sheriff === s.seat && <Crown className="seat-badge" aria-label="警长" />}
               </span>
-            )}
-          </div>
-        );
-      })}
-    </div>
+              {show ? (
+                <span className="seat-role">
+                  {info.icon} {info.name}
+                </span>
+              ) : team ? (
+                <span className="seat-role">
+                  {team.icon} {team.name}
+                </span>
+              ) : g ? (
+                <span className="seat-guess">
+                  {guessInfo(g).icon} {guessInfo(g).name}?
+                </span>
+              ) : null}
+            </Tag>
+          );
+        })}
+      </div>
+      {pickingSeat && (
+        <div className="guess-picker">
+          <span className="guess-picker-label">
+            你觉得 <b>{seatLabel(pickingSeat.seat)} {pickingSeat.name}</b> 是：
+          </span>
+          {guessOptions(ww).map((o) => (
+            <button key={o} type="button" className={`chip ${ww.guesses?.[pickingSeat.seat] === o ? 'chip-strong' : ''}`} onClick={() => void guess(pickingSeat.seat, o)}>
+              {guessInfo(o).icon} {guessInfo(o).name}
+            </button>
+          ))}
+          {ww.guesses?.[pickingSeat.seat] && (
+            <button type="button" className="chip" onClick={() => void guess(pickingSeat.seat, null)}>
+              清除
+            </button>
+          )}
+          <button type="button" className="icon-btn sm" aria-label="关闭" onClick={() => setPicking(null)}>
+            <X />
+          </button>
+        </div>
+      )}
+    </>
   );
 }
 
@@ -183,10 +253,12 @@ function SeatPicker({ room, options, value, onPick }: { room: Room; options: num
     <div className="seat-picker">
       {options.map((n) => {
         const s = ww.seats.find((x) => x.seat === n)!;
+        const g = !roleVisible(ww, s) ? ww.guesses?.[n] : undefined;
         return (
           <button key={n} type="button" className={`seat-pick ${value === n ? 'active' : ''}`} onClick={() => onPick(n)}>
             <b>{n}</b>
             <span>{s.human ? '你' : s.name}</span>
+            {g && <span className="seat-guess">{guessInfo(g).icon} {guessInfo(g).name}?</span>}
           </button>
         );
       })}

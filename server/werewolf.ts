@@ -21,6 +21,7 @@ import {
   shuffle,
   speechOrder,
   tallyVotes,
+  wolfCount,
   wolfTarget,
   BOARDS,
   checkRoles,
@@ -146,6 +147,7 @@ export function resetWerewolf(room: Room, rng: () => number = Math.random) {
     current: undefined,
     activity: undefined,
     activityAt: undefined,
+    guesses: {},
     witch: { save: true, poison: true },
     guardLast: null,
     knightUsed: false,
@@ -230,22 +232,53 @@ function historyFor(room: Room, x: WwSeat): ChatMessage[] {
   return turns;
 }
 
-/** 最后一条消息里附上的局面和自己的私密信息 */
+/** 公开的身份：开枪、自爆、骑士决斗、白痴翻牌 */
+const revealedText = (s: WwSeat) => (s.revealed === 'role' ? ROLE_INFO[s.role].name : s.revealed === 'wolf' ? '狼人' : '好人');
+
+/** 最后一条消息里附上的局面、所有人都知道的公开信息，和自己的私密信息 */
 function stateBlock(room: Room, x: WwSeat) {
   const ww = room.werewolf!;
-  const living = ww.seats.filter((s) => s.alive).map((s) => `${seatLabel(s.seat)}${s.idiotRevealed ? '（白痴，已翻牌）' : ''}`);
+  const living = ww.seats.filter((s) => s.alive);
   const dead = ww.seats.filter((s) => !s.alive).map((s) => `${seatLabel(s.seat)}（第 ${s.death?.day} 天，${DEATH_LABELS[s.death!.cause]}）`);
+  const wolves = wolfCount(ww);
+  const reveals = ww.seats.filter((s) => s.revealed).map((s) => `${seatLabel(s.seat)} 是${revealedText(s)}${s.alive ? '' : '（已出局）'}`);
+  const hidden = ww.seats.filter((s) => !s.alive && !s.revealed).map((s) => seatLabel(s.seat));
+  const range = wolves.min === wolves.max ? `${wolves.max} 名` : `${wolves.min}~${wolves.max} 名`;
+  const facts = [
+    `本局狼人阵营一共 ${wolves.total} 名。`,
+    reveals.length ? `已经公开的身份：${reveals.join('、')}。` : '还没有人公开身份。',
+    hidden.length ? `${hidden.join('、')} 出局时没有公开身份。` : '',
+    wolves.deadConfirmed ? `确认出局的狼人 ${wolves.deadConfirmed} 名。` : '还没有确认出局的狼人。',
+    `只看公开信息，场上还剩 ${range}狼人${wolves.min < wolves.max ? '（出局的人里有没有狼还不确定）' : ''}。`,
+  ];
+
   const mine: string[] = [];
+  if (isWolf(x.role)) {
+    const team = ww.seats.filter((s) => isWolf(s.role));
+    const alive = team.filter((s) => s.alive).map((s) => (s.seat === x.seat ? `你（${seatLabel(s.seat)}）` : seatLabel(s.seat)));
+    const gone = team.filter((s) => !s.alive).map((s) => `${seatLabel(s.seat)}（第 ${s.death?.day} 天${DEATH_LABELS[s.death!.cause]}）`);
+    mine.push(`狼队现在还活着 ${alive.length} 人：${alive.join('、') || '没有了'}${gone.length ? `；已经出局的队友：${gone.join('、')}` : ''}。场上一共还有 ${alive.length} 名狼人`);
+  }
   if (x.role === 'seer') {
     const checks = ww.nights.filter((n) => n.check).map((n) => `第 ${n.day} 夜验 ${seatLabel(n.check!.target)}：${n.check!.wolf ? '狼人' : '好人'}`);
     if (checks.length) mine.push(`你的查验结果：${checks.join('；')}`);
+    const aliveWolves = ww.nights.filter((n) => n.check?.wolf && seatOf(ww, n.check.target)?.alive).map((n) => seatLabel(n.check!.target));
+    if (aliveWolves.length) mine.push(`你验出的狼人里还活着的：${aliveWolves.join('、')}`);
   }
-  if (x.role === 'witch') mine.push(`你的药：解药${ww.witch.save ? '还在' : '已用'}，毒药${ww.witch.poison ? '还在' : '已用'}`);
-  if (x.role === 'guard' && ww.guardLast != null) mine.push(`你上一晚守护的是 ${seatLabel(ww.guardLast)}`);
+  if (x.role === 'witch') {
+    mine.push(`你的药：解药${ww.witch.save ? '还在' : '已用'}，毒药${ww.witch.poison ? '还在' : '已用'}`);
+    const used = ww.nights.flatMap((n) => [n.saved && n.wolfKill ? `第 ${n.day} 夜救了 ${seatLabel(n.wolfKill)}` : '', n.poison ? `第 ${n.day} 夜毒了 ${seatLabel(n.poison)}` : '']).filter(Boolean);
+    if (used.length) mine.push(`你用过的药：${used.join('；')}`);
+  }
+  if (x.role === 'guard') {
+    const guarded = ww.nights.filter((n) => n.guard).map((n) => `第 ${n.day} 夜守 ${seatLabel(n.guard!)}`);
+    if (guarded.length) mine.push(`你守护过：${guarded.join('；')}（不能连续两晚守同一个人）`);
+  }
   if (x.role === 'knight') mine.push(ww.knightUsed ? '你已经用过决斗' : '你的决斗还没用');
   return [
-    `【当前局面】第 ${ww.day} 天${ww.phase === 'night' ? '夜里' : '白天'}。存活：${living.join('、')}。${dead.length ? `出局：${dead.join('、')}。` : ''}${ww.sheriff ? `警长：${seatLabel(ww.sheriff)}。` : ''}`,
-    `【你】${seatLabel(x.seat)}「${x.name}」，身份${ROLE_INFO[x.role].name}${x.alive ? '' : '（你已经出局）'}。${mine.join('；')}`,
+    `【当前局面】第 ${ww.day} 天${ww.phase === 'night' ? '夜里' : '白天'}。存活 ${living.length} 人：${living.map((s) => `${seatLabel(s.seat)}${s.idiotRevealed ? '（白痴，已翻牌，不能投票）' : ''}`).join('、')}。${dead.length ? `出局：${dead.join('、')}。` : ''}${ww.sheriff ? `警长：${seatLabel(ww.sheriff)}。` : ''}`,
+    `【公开信息】${facts.filter(Boolean).join('')}`,
+    `【你】${seatLabel(x.seat)}「${x.name}」，身份${ROLE_INFO[x.role].name}${x.alive ? '' : '（你已经出局）'}。${mine.join('。')}${mine.length ? '。' : ''}`,
   ].join('\n');
 }
 
@@ -863,6 +896,7 @@ export class WerewolfGame {
         const options = aliveSeats(ww).filter((s) => s !== x.seat);
         const target = await this.choose(x.seat, 'shoot', options, true, `你是${name}，出局时可以开枪带走一名玩家，要开枪吗？`);
         if (target) {
+          x.revealed = 'role';
           await this.narrate(`${seatLabel(x.seat)} 翻牌：${name}！开枪带走了 ${seatLabel(target)}。`, 'skill');
           ww.tasks.unshift({ t: 'death', seat: target, cause: 'shot', lastWords: true });
         } else {
@@ -921,6 +955,7 @@ export class WerewolfGame {
         );
         if (r.explode) {
           this.clearDay();
+          x.revealed = 'role';
           await this.narrate(`${seatLabel(x.seat)} 自爆了！${ROLE_INFO[x.role].name === '狼人' ? '' : `翻牌：${ROLE_INFO[x.role].name}。`}今天的发言和投票结束，直接进入黑夜。`, 'skill');
           const next: WwTask[] = [{ t: 'death', seat: x.seat, cause: 'explode', lastWords: false }];
           if (x.role === 'whitewolf' && r.explodeTarget) {
@@ -931,6 +966,8 @@ export class WerewolfGame {
         } else if (r.duel) {
           ww.knightUsed = true;
           const target = seatOf(ww, r.duel)!;
+          x.revealed = 'role';
+          target.revealed = isWolf(target.role) ? 'wolf' : 'good';
           if (isWolf(target.role)) {
             this.clearDay();
             await this.narrate(`${seatLabel(x.seat)} 翻牌骑士，和 ${seatLabel(target.seat)} 决斗：${seatLabel(target.seat)} 是狼人，出局！直接进入黑夜。`, 'skill');
@@ -976,6 +1013,7 @@ export class WerewolfGame {
         const x = seatOf(ww, task.seat)!;
         if (x.role === 'idiot' && !x.idiotRevealed) {
           x.idiotRevealed = true;
+          x.revealed = 'role';
           await this.narrate(`${seatLabel(x.seat)} 被投票放逐，翻牌：白痴！免于出局，但之后不能再投票。`, 'skill');
           return;
         }
