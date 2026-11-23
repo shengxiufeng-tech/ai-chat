@@ -13,6 +13,8 @@ import {
   toHtml,
   toMarkdown,
   toPlainText,
+  humanSeatLine,
+  systemText,
   visibilityTag,
   type ExportOptions,
 } from '../exportDoc';
@@ -246,11 +248,12 @@ const ExportDocView = forwardRef<HTMLDivElement, { room: Room; messages: Message
 ) {
   const date = new Date();
   const dateText = `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日`;
+  const me = humanSeatLine(room);
   const visible = messages.filter((m) => m.kind || displayContent(room, m));
   return (
     <div ref={ref} className={`export-doc theme-${o.theme}`}>
       <div className="x-head">
-        <div className="x-kicker">{room.mode === 'trpg' ? 'COC 7 跑团记录' : 'AI 对话室'}</div>
+        <div className="x-kicker">{room.mode === 'trpg' ? 'COC 7 跑团记录' : room.mode === 'werewolf' ? '狼人杀记录' : 'AI 对话室'}</div>
         <h1>{room.title}</h1>
         <div className="x-meta">
           {dateText} · {visible.filter((m) => !m.kind).length} 条发言 · {room.participants.length} 位 AI
@@ -268,6 +271,13 @@ const ExportDocView = forwardRef<HTMLDivElement, { room: Room; messages: Message
               )}
             </span>
           ))}
+          {me && (
+            <span className="x-pill">
+              <span className="a">🧑</span>
+              <b>{me.name}</b>
+              <span className="m">{me.seat}号 · 你</span>
+            </span>
+          )}
         </div>
         {o.scenario && room.scenario.trim() && <div className="x-scenario">{room.scenario.trim()}</div>}
       </div>
@@ -286,7 +296,7 @@ const ExportDocView = forwardRef<HTMLDivElement, { room: Room; messages: Message
             return (
               <div key={m.id} className="x-roll">
                 {m.kind === 'note' ? '📒' : m.kind === 'ww' ? '⚖️' : '🎲'} {visibilityTag(m)}
-                {m.content}
+                {systemText(m)}
               </div>
             );
           }

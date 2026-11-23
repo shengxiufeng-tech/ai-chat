@@ -161,6 +161,8 @@ export interface WwMessageInfo {
   seat?: number;
   /** 发言的类型 */
   speech?: 'speech' | 'pk' | 'lastWords' | 'sheriffSpeech' | 'wolfchat';
+  /** AI 主持人播报时，程序给出的准确结果（AI 玩家读的是这一句；播报和它对不上时界面上也会显示） */
+  facts?: string;
 }
 
 /** 一次请求的 token 用量 */

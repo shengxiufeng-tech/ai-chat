@@ -375,5 +375,11 @@ export function viewerOf(s: WerewolfState): WwViewer {
   return { god: !me.alive || s.phase === 'end', seat: me.seat, wolf: isWolf(me.role) };
 }
 
+/** AI 主持人的播报有没有漏说或者说错座位号：座位号和准确结果里的不一样，就要把准确结果也显示出来 */
+export function narrationNeedsFacts(narration: string, facts: string) {
+  const seats = (t: string) => [...new Set([...t.matchAll(/(\d+)\s*号/g)].map((m) => m[1]))].sort().join(',');
+  return seats(narration) !== seats(facts);
+}
+
 /** 「3号」这样的称呼 */
 export const seatLabel = (n: number) => `${n}号`;

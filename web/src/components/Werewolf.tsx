@@ -6,6 +6,7 @@ import {
   ROLE_INFO,
   ROLE_ORDER,
   isWolf,
+  narrationNeedsFacts,
   rolesText,
   seatLabel,
   viewerOf,
@@ -222,7 +223,11 @@ export function WwCard({ room, m }: { room: Room; m: Message }) {
   return (
     <div className={`ww-announce ${type === 'skill' ? 'skill' : ''} ${type === 'end' ? 'end' : ''} ${m.status === 'streaming' ? 'streaming' : ''}`}>
       <Megaphone />
-      <span>{m.content || '…'}</span>
+      <span>
+        {m.content || '…'}
+        {/* AI 主持人漏说或说错了座位号：把准确结果也写出来 */}
+        {m.ww?.facts && narrationNeedsFacts(m.content, m.ww.facts) && <span className="ww-facts">{m.ww.facts}</span>}
+      </span>
     </div>
   );
 }

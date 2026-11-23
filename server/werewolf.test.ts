@@ -4,10 +4,10 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
-import { BOARDS, isWolf, type WerewolfState } from '../shared/werewolf.ts';
+import { BOARDS, isWolf, narrationNeedsFacts, type WerewolfState } from '../shared/werewolf.ts';
 import { RunnerManager } from './runner.ts';
 import { Store } from './store.ts';
-import { createWerewolfRoom, humanPrompt, parseChoice, resetWerewolf, parseSpeechActions, playerMessages, type WerewolfCreateOptions } from './werewolf.ts';
+import { createWerewolfRoom, guessKill, humanPrompt, parseChoice, resetWerewolf, parseSpeechActions, playerMessages, type WerewolfCreateOptions } from './werewolf.ts';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -71,6 +71,23 @@ test('解析 AI 的选择和发言里的动作', () => {
   assert.equal(parseSpeechActions('【决斗：6号】').duel, 6);
   assert.equal(parseSpeechActions('刀他\n【刀:2号】').kill, 2);
   assert.equal(parseSpeechActions('【刀:空刀】').kill, null);
+});
+
+test('狼人夜聊没写【刀】时，从正文或思考过程里猜目标', () => {
+  const opts = [1, 2, 3, 4, 5];
+  assert.equal(guessKill('既然两位哥哥都觉得，那我就听你们的，今晚先刀 5 号吧！', '刀: 4号', opts), 5, '正文优先于思考过程');
+  assert.equal(guessKill('我看4号位置居中，先拿4号开刀探路。', '', opts), 4);
+  assert.equal(guessKill('那必须跟啊！今晚就拿 2 号祭旗！', '刀:2号', opts), 2, '正文猜不出时看思考过程');
+  assert.equal(guessKill('昨晚刀了 9 号没成，今晚刀 3 号', '', opts), 3, '不在可选范围里的不算，取最后提到的');
+  assert.equal(guessKill('今晚空刀吧', '', opts), null);
+  assert.equal(guessKill('我也不知道', '', opts), undefined);
+});
+
+test('AI 主持人的播报：座位号对得上就不重复显示准确结果', () => {
+  assert.equal(narrationNeedsFacts('竞选结果已出，恭喜9号玩家当选本局警长！', '9号 当选警长。'), false);
+  assert.equal(narrationNeedsFacts('天亮了。昨晚是平安夜，场上没有人出局。', '昨晚是平安夜，没有人出局。'), false);
+  assert.equal(narrationNeedsFacts('天亮了，昨晚是个不平静的夜晚。', '昨晚 4号、9号 出局。'), true, '漏说座位号');
+  assert.equal(narrationNeedsFacts('昨晚 3号 倒下了。', '昨晚是平安夜，没有人出局。'), true, '编出了座位号');
 });
 
 test('给人类看的提示不带 AI 的格式要求', () => {
@@ -220,6 +237,14 @@ test('AI 知道公开的大局：狼人总数、公开的身份、还剩几名�
     assert.match(v, /确认出局的狼人 1 名/);
     assert.match(v, /场上还剩 1~2 名狼人/, '出局的平民身份没公开，所以是 1~2 名');
     assert.doesNotMatch(v, /狼队现在/, '好人不知道狼队的情况');
+    assert.match(v, /游戏还没结束，说明场上还有狼人，神职和平民也都还有人活着/);
+
+    // AI 主持人播报的消息：AI 玩家读到的是准确结果，不是主持人的渲染
+    ctx.room.messages.push({ id: 'n1', role: 'system', kind: 'ww', speakerName: '法官', content: '夜色散去，有人永远睡着了……', status: 'done', createdAt: 0, visibility: 'public', ww: { type: 'announce', facts: `昨晚 ${villager.seat}号 出局。` } });
+    const hist = playerMessages(ctx.room, otherVillager.seat, '【任务：狼人夜聊】').map((m) => m.content).join('\n');
+    assert.match(hist, new RegExp(`【法官】昨晚 ${villager.seat}号 出局。`));
+    assert.doesNotMatch(hist, /永远睡着了/);
+    ctx.room.messages.pop();
 
     const w = last(wolves[1].seat);
     assert.match(w, /狼队现在还活着 2 人/);

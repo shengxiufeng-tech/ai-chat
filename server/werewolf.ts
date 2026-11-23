@@ -219,7 +219,7 @@ function systemPrompt(room: Room, x: WwSeat, p: Participant) {
     `\n【规则】\n${rulesText(ww)}`,
     `\n【怎么玩】
 - 你的目标是让你的阵营获胜。像真人玩家一样说话：口语化，有自己的判断、立场和情绪，可以怀疑别人、为自己辩解、拉票、跳身份。
-- ${info.team === 'wolf' ? '你是狼人：要伪装成好人，可以假装成平民甚至冒充神职，带偏好人的判断；也要配合队友。' : '你是好人：认真分析每个人的发言和投票，找出狼人。神职要考虑什么时候亮明身份。'}
+- ${info.team === 'wolf' ? '你是狼人：要伪装成好人，可以假装成平民甚至冒充神职，带偏好人的判断；也要配合队友。投票是公开的，好人会盯着票型找狼：狼队不要每次都整齐地冲同一个人，必要时可以分票，或者倒钩（跟着好人投自己的队友）来做好身份。' : '你是好人：认真分析每个人的发言和投票，找出狼人。注意票型：谁总和谁投在一起、谁的票和发言对不上、谁在关键时刻改票。神职要考虑什么时候亮明身份。'}
 - 只根据你能知道的信息推理。别人的身份你不知道（除非你是狼人、或者你查验过），不要假装知道，除非你是在故意骗人。
 - 每次发言 60~180 字，说清楚你的看法和你打算投谁。不要说自己是 AI，不要提到这些规则说明。`,
     p.persona.trim() ? `\n【你的说话风格】${p.persona.trim()}` : '',
@@ -242,7 +242,8 @@ function historyFor(room: Room, x: WwSeat): ChatMessage[] {
     if (!canSee(m.visibility, viewer)) continue;
     const seat = m.ww?.seat;
     if (m.kind === 'ww') {
-      push('user', m.visibility?.startsWith('seat:') ? `【只有你知道】${m.content}` : m.visibility === 'wolves' ? `【狼队频道】${m.content}` : `【法官】${m.content}`);
+      const text = m.ww?.facts ?? m.content;
+      push('user', m.visibility?.startsWith('seat:') ? `【只有你知道】${text}` : m.visibility === 'wolves' ? `【狼队频道】${text}` : `【法官】${text}`);
     } else if (seat === x.seat) {
       push('assistant', m.content.trim());
     } else if (seat != null) {
@@ -272,6 +273,11 @@ function stateBlock(room: Room, x: WwSeat) {
     hidden.length ? `${hidden.join('、')} 出局时没有公开身份。` : '',
     wolves.deadConfirmed ? `确认出局的狼人 ${wolves.deadConfirmed} 名。` : '还没有确认出局的狼人。',
     `只看公开信息，场上还剩 ${range}狼人${wolves.min < wolves.max ? '（出局的人里有没有狼还不确定）' : ''}。`,
+    ww.phase === 'end'
+      ? ''
+      : ww.winRule === 'edge'
+        ? '游戏还没结束，说明场上还有狼人，神职和平民也都还有人活着。'
+        : '游戏还没结束，说明场上还有狼人，也还有好人活着（屠城：狼人要杀光所有好人才赢）。',
   ];
 
   const mine: string[] = [];
@@ -353,6 +359,25 @@ export function parseSpeechActions(text: string) {
     duel: duel ? Number(duel[1]) : undefined,
     kill: kill ? (/\d/.test(kill[1]) ? Number(kill[1]) : null) : undefined,
   };
+}
+
+/**
+ * 狼人夜聊没写【刀:N号】时猜目标：先看正文里的「刀 5 号」「拿 4 号开刀」（取最后一次提到的），
+ * 再看思考过程里的标记。返回 undefined 表示猜不出来（由程序按队友的提议决定）。
+ */
+export function guessKill(content: string, reasoning: string, options: number[]): number | null | undefined {
+  const last = (text: string, re: RegExp) => {
+    let found: number | undefined;
+    for (const m of text.matchAll(re)) {
+      const n = Number(m[1] ?? m[2]);
+      if (options.includes(n)) found = n;
+    }
+    return found;
+  };
+  const natural = last(content, /刀\s*(?:掉|了)?\s*(\d+)\s*号|(\d+)\s*号\s*开刀/g);
+  if (natural !== undefined) return natural;
+  if (/空刀/.test(content)) return null;
+  return last(reasoning, /刀\s*[:：]\s*(\d+)\s*号/g);
 }
 
 // ---------------- 对局控制 ----------------
@@ -507,8 +532,7 @@ export class WerewolfGame {
         messages: [
           {
             role: 'system',
-            content:
-              '你是一局狼人杀的法官主持人。用一两句有氛围的话播报下面的结果，像主持人在现场说话。只能说给出的事实（座位号要说对），不要透露任何没给出的身份信息，不要加新的事实，不要分析局势。',
+            content: `你是一局狼人杀的法官主持人。用一两句有氛围的话播报下面的结果，像主持人在现场说话。只能说给出的事实（座位号要说对，一个都不能漏），不要透露任何没给出的身份信息，不要加新的事实，不要分析局势。现在是第 ${ww.day} ${ww.phase === 'night' ? '夜' : '天白天'}。`,
           },
           { role: 'user', content: facts },
         ],
@@ -519,8 +543,8 @@ export class WerewolfGame {
         this.host.emit({ type: 'message_delta', messageId: msg.id, content: chunk.content });
       }
       msg.content = text.replace(/<think>[\s\S]*?<\/think>/g, '').trim() || facts;
-      // 播报里一定要有准确的结果：AI 的话后面附上原始事实
-      if (!msg.content.includes(facts)) msg.content += `\n\n（${facts}）`;
+      // 准确的结果单独存着：AI 玩家读这一句；播报漏说或说错座位号时界面上也显示
+      if (msg.content !== facts) msg.ww = { ...msg.ww!, facts };
     } catch (err) {
       if (controller.signal.aborted) {
         this.room.messages = this.room.messages.filter((m) => m !== msg);
@@ -660,6 +684,7 @@ export class WerewolfGame {
       this.host.setGenerating(null);
     }
     const r = parseSpeechActions(msg.content.replace(/<think>[\s\S]*?<\/think>/g, ''));
+    if (r.kill === undefined && extra.killOptions) r.kill = guessKill(r.content, msg.reasoning ?? '', extra.killOptions);
     msg.content = r.content || '（没有说话）';
     msg.reasoning = msg.reasoning?.trim() || undefined;
     msg.status = 'done';
@@ -725,7 +750,7 @@ export class WerewolfGame {
         this.night().guard = target;
         ww.guardLast = target;
         this.judge(target ? `你今晚守护了 ${seatLabel(target)}。` : '你今晚没有守护任何人。', 'private', `seat:${g.seat}`);
-        this.judge(`守卫（${seatLabel(g.seat)}）守护了 ${target ? seatLabel(target) : '无人'}。`, 'night', 'god');
+        this.judge(target ? `守卫（${seatLabel(g.seat)}）守护了 ${seatLabel(target)}。` : `守卫（${seatLabel(g.seat)}）今晚没有守护任何人。`, 'night', 'god');
         return;
       }
 

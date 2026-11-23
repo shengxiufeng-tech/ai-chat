@@ -2,6 +2,7 @@
 
 import { kpDisplayText } from '../../shared/coc';
 import { effortLabel, type Message, type Room } from '../../shared/types';
+import { narrationNeedsFacts } from '../../shared/werewolf';
 
 export interface ExportOptions {
   modelInfo: boolean;
@@ -30,6 +31,19 @@ export function visibilityTag(m: Message) {
 }
 
 const SYSTEM_KINDS = new Set(['roll', 'note', 'handout', 'ww']);
+
+/** 法官消息的文字：AI 主持人漏说或说错座位号时，后面附上准确结果 */
+export function systemText(m: Message) {
+  const facts = m.ww?.facts;
+  return facts && narrationNeedsFacts(m.content, facts) ? `${m.content}（${facts}）` : m.content;
+}
+
+/** 狼人杀：你自己的座位（你不是 AI 参与者，参与者名单里没有你） */
+export function humanSeatLine(room: Room) {
+  const ww = room.mode === 'werewolf' ? room.werewolf : undefined;
+  const me = ww?.humanSeat != null ? ww.seats.find((s) => s.seat === ww.humanSeat) : undefined;
+  return me ? { name: me.name, seat: me.seat } : undefined;
+}
 const kindIcon = (m: Message) => (m.kind === 'note' ? '📒' : m.kind === 'handout' ? '📜' : m.kind === 'ww' ? '⚖️' : '🎲');
 
 export function speakerOf(room: Room, m: Message) {
@@ -51,12 +65,14 @@ export function toMarkdown(room: Room, messages: Message[], o: ExportOptions) {
       const model = o.modelInfo ? `（${p.model}${p.reasoningEffort ? ` · 思考强度 ${effortLabel(p.reasoningEffort)}` : ''}）` : '';
       lines.push(`- ${p.avatar} **${p.name}**${model}${p.bio ? `：${p.bio}` : ''}`);
     }
+    const me = humanSeatLine(room);
+    if (me) lines.push(`- 🧑 **${me.name}**（你）：${me.seat}号玩家`);
     lines.push('');
   }
   lines.push('---', '');
   for (const m of messages) {
     if (m.kind && SYSTEM_KINDS.has(m.kind)) {
-      if (o.rolls) lines.push(`> ${kindIcon(m)} ${visibilityTag(m)}${m.content}`, '');
+      if (o.rolls) lines.push(`> ${kindIcon(m)} ${visibilityTag(m)}${systemText(m)}`, '');
       continue;
     }
     const text = displayContent(room, m);
@@ -81,7 +97,7 @@ export function toPlainText(room: Room, messages: Message[], o: ExportOptions) {
   const out = [`【${room.title}】`, ''];
   for (const m of messages) {
     if (m.kind && SYSTEM_KINDS.has(m.kind)) {
-      if (o.rolls) out.push(`${kindIcon(m)} ${visibilityTag(m)}${m.content}`, '');
+      if (o.rolls) out.push(`${kindIcon(m)} ${visibilityTag(m)}${systemText(m)}`, '');
       continue;
     }
     const text = displayContent(room, m);
