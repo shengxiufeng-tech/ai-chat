@@ -26,14 +26,14 @@ import { otherSpeakerNames } from '../../../shared/text';
 import { del, patch, post } from '../api';
 import { askConfirm } from '../confirm';
 import { attempt, toast } from '../toast';
-import { useFollowStream } from '../prefs';
+import { useCollapseThinking, useFollowStream } from '../prefs';
 import { useRoom } from '../useRoom';
 import { AssistantPanel } from './AssistantPanel';
 import { CastBar } from './CastBar';
 import { CharacterWizard } from './CharacterWizard';
 import { Composer } from './Composer';
 import { ExportModal } from './ExportModal';
-import { MessageItem } from './MessageItem';
+import { MessageItem, type ThinkingMode } from './MessageItem';
 import { NotesPanel } from './NotesPanel';
 import { ParticipantPanel } from './ParticipantPanel';
 import { deleteRoom, renameRoom } from './RoomList';
@@ -42,7 +42,7 @@ import { SheetPanel } from './SheetPanel';
 import { TrpgSettingsPanel } from './TrpgSettingsPanel';
 import { TrpgSetup } from './TrpgSetup';
 import { canSee, viewerOf } from '../../../shared/werewolf';
-import { restartWerewolf, SeatBar, WwActionPanel, WwCard, WwInfoPanel, WwSettingsPanel, WwSetupCard, wwStatus } from './Werewolf';
+import { restartWerewolf, SeatBar, WwActionPanel, WwCard, WwInfoPanel, WwSettingsPanel, WwElapsed, WwSetupCard, wwStatus } from './Werewolf';
 
 type Tab = 'participants' | 'settings' | 'sheet' | 'notes' | 'assistant' | 'trpg-settings' | 'ww-info' | 'ww-settings';
 
@@ -87,6 +87,7 @@ export function RoomView({
   const justSent = useRef(false);
   const [showJump, setShowJump] = useState(false);
   const followStream = useFollowStream();
+  const collapseThinking = useCollapseThinking();
   const trpg = room?.mode === 'trpg';
   const activeTab: Tab = tab ?? (trpg ? 'sheet' : room?.mode === 'werewolf' ? 'ww-info' : 'participants');
 
@@ -211,6 +212,8 @@ export function RoomView({
   const viewer = ww ? viewerOf(ww) : null;
   const visibleMessages = viewer ? room.messages.filter((m) => canSee(m.visibility, viewer)) : room.messages;
   const myTurn = !!ww?.pending && ww.pending.seat === ww.humanSeat;
+  // 思考过程：狼人杀里始终折叠，还在局中时不能展开（AI 的思考会暴露身份）
+  const thinking: ThinkingMode = viewer && !viewer.god ? 'locked' : ww || collapseThinking ? 'collapsed' : 'auto';
 
   const tabs: { key: Tab; label: string; title?: string; icon: ReactNode }[] = ww
     ? [
@@ -269,6 +272,7 @@ export function RoomView({
               <span className={`status-pill ${running ? 'running' : ''} ${generating || runner?.picking ? 'busy' : ''}`}>
                 <span className="dot" />
                 {statusText}
+                {ww?.activityAt && running && !speaker && <WwElapsed since={ww.activityAt} />}
                 {!connected && '（重连中…）'}
               </span>
             </div>
@@ -463,6 +467,7 @@ export function RoomView({
                     onAccept={onAccept}
                     onOpenNotes={onOpenNotes}
                     hideNames={m.participantId ? namesById.get(m.participantId) : undefined}
+                    thinking={thinking}
                   />
                   ),
                 )}
@@ -535,7 +540,13 @@ export function RoomView({
         </aside>
       )}
 
-      {exporting && <ExportModal room={room} visibleMessages={viewer ? visibleMessages : undefined} onClose={() => setExporting(false)} />}
+      {exporting && (
+        <ExportModal
+          room={room}
+          visibleMessages={viewer ? (thinking === 'locked' ? visibleMessages.map((m) => ({ ...m, reasoning: undefined })) : visibleMessages) : undefined}
+          onClose={() => setExporting(false)}
+        />
+      )}
       {wizard && <CharacterWizard room={room} onClose={() => setWizard(false)} />}
     </div>
   );

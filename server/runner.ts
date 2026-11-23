@@ -5,7 +5,7 @@ import { otherSpeakerNames, stripImpersonation } from '../shared/text.ts';
 import fs from 'node:fs';
 import { ASSET_KIND_LABELS, type Message, type Participant, type Room, type RoomEvent, type RunnerState, type RunStatus } from '../shared/types.ts';
 import { DEFAULT_CONTEXT_WINDOW, fitToContext } from './context.ts';
-import { completeChat, contextWindowOf, streamChat, type ChatPart, type WireMessage } from './llm.ts';
+import { completeChat, contextWindowOf, streamChat, streamMeter, type ChatPart, type WireMessage } from './llm.ts';
 import { activePlanner, appendToLast, applyPlanCommands, plannerInstruction, writerBlock } from './planner.ts';
 import {
   buildKpMessages,
@@ -804,6 +804,7 @@ export class RoomRunner {
 
     let ok = true;
     let plan = '';
+    let meter: ReturnType<typeof streamMeter> | undefined;
     try {
       // 构思 / 执笔：先构思；构思失败时由执笔模型单独完成，不让整轮卡住
       if (planner) {
@@ -831,17 +832,21 @@ export class RoomRunner {
         sessionId: sessionIdFor(room.id, p.id),
         signal: controller.signal,
       });
+      meter = streamMeter(message);
       for await (const chunk of stream) {
         if (chunk.finish === 'length' || chunk.finish === 'content_filter' || chunk.finish === 'incomplete') {
           message.truncated = chunk.finish;
         }
         if (chunk.content) message.content += chunk.content;
         if (chunk.reasoning) message.reasoning += chunk.reasoning;
+        const thinkMs = meter.chunk(chunk);
+        if (!chunk.content && !chunk.reasoning && thinkMs === undefined) continue;
         this.emit({
           type: 'message_delta',
           messageId: message.id,
           content: chunk.content,
           reasoning: chunk.reasoning,
+          ...(thinkMs !== undefined ? { thinkMs } : {}),
         });
         this.store.touchRoom(room.id);
       }
@@ -859,6 +864,7 @@ export class RoomRunner {
     } finally {
       this.current = null;
       delete message.planning;
+      meter?.finish();
     }
 
     message.content = stripNamePrefix(message.content, p.name);

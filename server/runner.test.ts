@@ -278,3 +278,42 @@ test('剧本图片：守秘人能看到地图图片，[展示] 把手出物给�
     await cleanup();
   }
 });
+
+test('多人对话里的推理模型：记录思考用时、服务商报告的输出 token', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-chat-think-'));
+  const store = new Store(dir);
+  store.saveSettings({ baseUrl: 'mock', defaultModel: 'mock/fast' });
+  const room: Room = {
+    id: 'c1',
+    mode: 'chat',
+    title: 't',
+    scenario: '聊聊天',
+    participants: [
+      { id: 'a', name: '阿青', avatar: '🤖', color: '#fff', model: 'mock/thinker', reasoningEffort: 'high', bio: '', persona: '', temperature: 1, enabled: true },
+    ],
+    messages: [],
+    settings: { ...DEFAULT_ROOM_SETTINGS, turnMode: 'manual' },
+    createdAt: 0,
+    updatedAt: 0,
+  };
+  store.addRoom(room);
+  const runner = new RunnerManager(store).get('c1');
+  const deltas: number[] = [];
+  runner.subscribe((ev) => ev.type === 'message_delta' && ev.thinkMs !== undefined && deltas.push(ev.thinkMs));
+  try {
+    const r = store.getRoom('c1')!;
+    runner.requestTurn('a');
+    await until(() => r.messages.some((m) => m.status === 'done'));
+    const m = r.messages[0];
+    assert.match(m.reasoning ?? '', /模拟思考/);
+    assert.ok((m.thinkMs ?? 0) >= 1000, `思考用时 ${m.thinkMs}`);
+    assert.deepEqual(deltas, [m.thinkMs]);
+    assert.ok((m.outputTokens ?? 0) > 0, '记下了服务商报告的输出 token');
+    assert.equal(m.reasoningTokens, 60);
+  } finally {
+    runner.dispose();
+    await sleep(100);
+    store.flushAll();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

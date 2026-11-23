@@ -40,7 +40,7 @@ import {
 export type { WerewolfCreateOptions };
 import type { Message, Participant, Room, RoomEvent, WwMessageInfo } from '../shared/types.ts';
 import { DEFAULT_ROOM_SETTINGS } from '../shared/types.ts';
-import { completeChat, streamChat, type ChatMessage } from './llm.ts';
+import { completeChat, streamChat, streamMeter, type ChatMessage } from './llm.ts';
 import { newId, type Store } from './store.ts';
 
 // ---------------- 新建房间 ----------------
@@ -145,6 +145,7 @@ export function resetWerewolf(room: Room, rng: () => number = Math.random) {
     tasks: [],
     current: undefined,
     activity: undefined,
+    activityAt: undefined,
     witch: { save: true, poison: true },
     guardLast: null,
     knightUsed: false,
@@ -345,6 +346,7 @@ export class WerewolfGame {
     this.host.emitRoomMeta();
   }
   private setActivity(text: string | undefined) {
+    if (text !== this.ww.activity) this.ww.activityAt = text ? Date.now() : undefined;
     this.ww.activity = text;
     this.host.emitRoomMeta();
   }
@@ -393,12 +395,12 @@ export class WerewolfGame {
         try {
           await this.runTask(ww.current);
           ww.current = undefined;
-          ww.activity = undefined;
+          ww.activity = ww.activityAt = undefined;
           this.meta();
         } catch (err) {
           const aborted = (err as { name?: string })?.name === 'AbortError';
           ww.pending = null;
-          ww.activity = undefined;
+          ww.activity = ww.activityAt = undefined;
           this.meta();
           if (!aborted) this.host.notice(`狼人杀暂停了：${err instanceof Error ? err.message : String(err)}。处理好以后点「继续」从这一步重新开始。`, 'error');
           break;
@@ -572,6 +574,7 @@ export class WerewolfGame {
     this.host.setGenerating({ messageId: msg.id, participantId: p.id });
     const controller = new AbortController();
     this.controller = controller;
+    const meter = streamMeter(msg);
     try {
       for await (const chunk of streamChat({
         baseUrl: settings.baseUrl,
@@ -585,8 +588,11 @@ export class WerewolfGame {
       })) {
         if (chunk.content) msg.content += chunk.content;
         if (chunk.reasoning) msg.reasoning += chunk.reasoning;
-        this.host.emit({ type: 'message_delta', messageId: msg.id, content: chunk.content, reasoning: chunk.reasoning });
+        const thinkMs = meter.chunk(chunk);
+        if (!chunk.content && !chunk.reasoning && thinkMs === undefined) continue;
+        this.host.emit({ type: 'message_delta', messageId: msg.id, content: chunk.content, reasoning: chunk.reasoning, ...(thinkMs !== undefined ? { thinkMs } : {}) });
       }
+      meter.finish();
     } catch (err) {
       // 停止或出错：去掉没说完的发言，这一步之后重新开始
       this.room.messages = this.room.messages.filter((m) => m !== msg);

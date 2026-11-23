@@ -15,6 +15,7 @@ import {
 } from '../../../shared/werewolf';
 import type { Message, Participant, Room, RunnerState } from '../../../shared/types';
 import { patch, post } from '../api';
+import { fmtDuration, useTicker } from '../clock';
 import { askConfirm } from '../confirm';
 import { attempt } from '../toast';
 import { ModelInput } from './ModelInput';
@@ -38,6 +39,13 @@ export function wwStatus(ww: WerewolfState, runner: RunnerState | null, speaker?
   if (ww.activity) return ww.activity;
   const when = ww.phase === 'night' ? `第 ${ww.day} 夜` : `第 ${ww.day} 天`;
   return runner?.status === 'running' ? when : `${when} · 已暂停`;
+}
+
+/** 这一步已经等了多久（AI 在后台做决定时没有文字输出，显示时间免得以为卡住了） */
+export function WwElapsed({ since }: { since: number }) {
+  const now = useTicker(true);
+  const ms = now - since;
+  return ms >= 3000 ? <span className="status-elapsed"> · {fmtDuration(ms)}</span> : null;
 }
 
 // ---------------- 座位表 ----------------

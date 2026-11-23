@@ -179,6 +179,24 @@ for (const narration of ['fixed', 'ai'] as const) {
   });
 }
 
+test('推理模型的发言：记录思考过程和用时，写正文时把用时推给前端', async () => {
+  const ctx = setup({ boardId: 'six', join: false, sheriff: false, model: 'mock/thinker' });
+  const deltas: number[] = [];
+  ctx.runner.subscribe((ev) => ev.type === 'message_delta' && ev.thinkMs !== undefined && deltas.push(ev.thinkMs));
+  try {
+    ctx.runner.run();
+    const spoken = () => ctx.room.messages.find((m) => m.role === 'ai' && m.status === 'done');
+    for (let i = 0; i < 1000 && !spoken(); i++) await sleep(5);
+    const m = spoken();
+    assert.ok(m, '有一条说完的发言');
+    assert.match(m!.reasoning ?? '', /模拟思考/);
+    assert.ok((m!.thinkMs ?? 0) >= 1000, `思考用时 ${m!.thinkMs}`);
+    assert.ok(deltas.includes(m!.thinkMs!), '用时随增量发给了前端');
+  } finally {
+    await ctx.cleanup();
+  }
+});
+
 test('白痴被投票放逐：翻牌免死，之后不能投票', async () => {
   const ctx = setup({ boardId: 'twelve-idiot', join: false, sheriff: false });
   try {

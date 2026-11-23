@@ -927,7 +927,7 @@ app.get('/api/rooms/:id/events', (req, res) => {
     res.write(`data: ${JSON.stringify(ev)}\n\n`);
   };
   const runner = runners.get(id);
-  send({ type: 'snapshot', room, runner: runner.state() });
+  send({ type: 'snapshot', room, runner: runner.state(), now: Date.now() });
   const unsubscribe = runner.subscribe(send);
   const heartbeat = setInterval(() => res.write(': ping\n\n'), 15000);
   req.on('close', () => {

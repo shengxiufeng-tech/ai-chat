@@ -188,6 +188,8 @@ export interface WerewolfState {
   current?: WwTask;
   /** 界面上显示的「现在在干什么」 */
   activity?: string;
+  /** activity 从什么时候开始（界面上显示已经等了多久） */
+  activityAt?: number;
   witch: { save: boolean; poison: boolean };
   guardLast: number | null;
   knightUsed: boolean;

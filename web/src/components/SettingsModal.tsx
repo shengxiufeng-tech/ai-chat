@@ -8,7 +8,7 @@ import { CacheDiagnostics } from './CacheDiagnostics';
 import { Modal } from './Modal';
 import { ModelInput } from './ModelInput';
 import { PhoneAccess } from './PhoneAccess';
-import { setFollowStream, useFollowStream } from '../prefs';
+import { setCollapseThinking, setFollowStream, useCollapseThinking, useFollowStream } from '../prefs';
 import { Field, ToggleRow } from './ui';
 
 export function SettingsModal({ onClose }: { onClose: () => void }) {
@@ -16,6 +16,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
   const [testResult, setTestResult] = useState<{ ok: boolean; text: string } | null>(null);
   const [testing, setTesting] = useState(false);
   const followStream = useFollowStream();
+  const collapseThinking = useCollapseThinking();
 
   useEffect(() => {
     void attempt(() => get<AppSettings>('/settings')).then((x) => x && setS(x));
@@ -85,6 +86,12 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
           hint="默认关闭：新回复出现时只滚到它的开头，之后不再跟着往下滚，方便从头阅读；下面还有内容时会出现「回到最新」按钮。这个设置只对当前设备有效。"
           checked={followStream}
           onChange={setFollowStream}
+        />
+        <ToggleRow
+          label="思考过程始终折叠"
+          hint="默认在模型思考时展开、开始回答后自动收起。打开后一直折叠，只显示「思考中」和用时，需要时点开看。生成时消息旁边都会显示已经过了多久和输出了多少 token。狼人杀里始终折叠。这个设置只对当前设备有效。"
+          checked={collapseThinking}
+          onChange={setCollapseThinking}
         />
         <div className="divider" />
         <PhoneAccess />

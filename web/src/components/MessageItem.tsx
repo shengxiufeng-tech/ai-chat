@@ -7,6 +7,7 @@ import {
   Copy,
   Lightbulb,
   Loader2,
+  Lock,
   NotebookPen,
   PenLine,
   Pencil,
@@ -22,8 +23,10 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { kpDisplayText } from '../../../shared/coc';
 import { stripImpersonation } from '../../../shared/text';
+import { estimateTokens } from '../../../shared/tokens';
 import { effortLabel, type Message } from '../../../shared/types';
 import { copyText } from '../clipboard';
+import { fmtDuration, fmtTokens, useTicker } from '../clock';
 import { shortModel } from '../models';
 import { EffortMeter } from './EffortPicker';
 import { HandoutCard } from './HandoutCard';
@@ -99,6 +102,7 @@ export const MessageItem = memo(function MessageItem({
   onAccept,
   onOpenNotes,
   hideNames,
+  thinking = 'auto',
 }: {
   message: Message;
   isLast: boolean;
@@ -117,6 +121,8 @@ export const MessageItem = memo(function MessageItem({
   onOpenNotes?: () => void;
   /** 其他人的名字：生成过程中隐藏以「【名字】：」开头的冒充段落 */
   hideNames?: string[];
+  /** 思考过程：auto 思考时展开、写正文后收起；collapsed 始终折叠；locked 不能展开（狼人杀里还在局中时） */
+  thinking?: ThinkingMode;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(m.content);
@@ -184,6 +190,7 @@ export const MessageItem = memo(function MessageItem({
           )}
           <ModelTag model={m.model} effort={m.reasoningEffort} planner={m.planner} />
           <span className="msg-time">{time(m.createdAt)}</span>
+          {streaming && <LiveStats m={m} />}
           {m.status === 'interrupted' && <span className="badge badge-warn">被打断</span>}
           {!!m.truncated && !streaming && (
             <span
@@ -254,16 +261,7 @@ export const MessageItem = memo(function MessageItem({
           </details>
         )}
 
-        {m.reasoning && (
-          <details className="msg-reasoning" open={streaming && !m.content}>
-            <summary>
-              <ChevronRight className="chev" />
-              <Brain />
-              思考过程
-            </summary>
-            <div className="msg-reasoning-text">{m.reasoning}</div>
-          </details>
-        )}
+        {(m.reasoning || (!streaming && m.thinkMs)) && <Reasoning m={m} streaming={streaming} mode={thinking} />}
 
         {editing ? (
           <div className="msg-bubble msg-edit">
@@ -333,3 +331,48 @@ export const MessageItem = memo(function MessageItem({
     </div>
   );
 });
+
+export type ThinkingMode = 'auto' | 'collapsed' | 'locked';
+
+/** 思考过程：思考中显示「思考中…」，结束后显示「思考了 12 秒 · 1.2k tokens」 */
+function Reasoning({ m, streaming, mode }: { m: Message; streaming: boolean; mode: ThinkingMode }) {
+  const thinkingNow = streaming && !m.content;
+  const tokens = m.reasoningTokens ?? (m.reasoning ? estimateTokens(m.reasoning) : 0);
+  const label = thinkingNow ? '思考中…' : m.thinkMs ? `思考了 ${fmtDuration(m.thinkMs)}${tokens ? ` · ${fmtTokens(tokens)}` : ''}` : '思考过程';
+  const icon = thinkingNow ? <Loader2 className="spin" /> : <Brain />;
+  // 模型没有公开思考过程（只报告了思考用时 / token），或者狼人杀里还在局中：只显示一行，不能展开
+  if (!m.reasoning || mode === 'locked') {
+    return (
+      <div className="msg-reasoning msg-reasoning-static" title={mode === 'locked' && m.reasoning ? '思考过程会暴露身份，出局或游戏结束后可以展开查看' : undefined}>
+        <div className="msg-reasoning-line">
+          {mode === 'locked' && m.reasoning ? <Lock /> : icon}
+          {label}
+          {mode === 'locked' && m.reasoning ? <span className="msg-plan-warn">出局后可看</span> : !m.reasoning && <span className="hint">（模型没有公开思考过程）</span>}
+        </div>
+      </div>
+    );
+  }
+  return (
+    <details className="msg-reasoning" {...(mode === 'auto' ? { open: thinkingNow } : {})}>
+      <summary>
+        <ChevronRight className="chev" />
+        {icon}
+        {label}
+      </summary>
+      <div className="msg-reasoning-text">{m.reasoning}</div>
+    </details>
+  );
+}
+
+/** 生成中：已经过了多久、输出了多少 token（估算），免得以为卡住了 */
+function LiveStats({ m }: { m: Message }) {
+  const now = useTicker(true);
+  const tokens = estimateTokens((m.plan ?? '') + (m.reasoning ?? '') + m.content);
+  const phase = m.planning ? '构思中' : m.content ? '输出中' : m.reasoning ? '思考中' : '等待回复';
+  return (
+    <span className="msg-live" title="从开始生成到现在的时间 · 已经输出的 token（按字数估算）">
+      {phase} · {fmtDuration(now - m.createdAt)}
+      {tokens > 0 && ` · ↓ ${fmtTokens(tokens)}`}
+    </span>
+  );
+}

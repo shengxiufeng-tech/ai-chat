@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { test } from 'node:test';
-import { listModels, streamChat, ThinkSplitter, type ChatChunk } from './llm.ts';
+import { listModels, streamChat, streamMeter, ThinkSplitter, type ChatChunk } from './llm.ts';
 
 function splitAll(pieces: string[]) {
   const s = new ThinkSplitter();
@@ -280,4 +280,43 @@ test('模型长时间没有回应时自动停止并报错，而不是一直卡�
   );
   assert.equal(stalled.text, '凤笙，钥');
   assert.match(stalled.error, /回复中断了/);
+});
+
+test('记录思考用时和输出 token：写正文时算出思考时长，用量来自服务商', () => {
+  const realNow = Date.now;
+  let now = 1000;
+  Date.now = () => now;
+  try {
+    const m: { reasoning?: string; thinkMs?: number; outputTokens?: number; reasoningTokens?: number } = { reasoning: '' };
+    const meter = streamMeter(m);
+    now = 1500;
+    m.reasoning += '想一想';
+    assert.equal(meter.chunk({ reasoning: '想一想' }), undefined, '还在思考');
+    now = 4200;
+    assert.equal(meter.chunk({ content: '答' }), 3200, '开始写正文时算出思考时长');
+    now = 5000;
+    assert.equal(meter.chunk({ content: '案' }), undefined, '只算一次');
+    meter.chunk({ usage: { input: 10, output: 120, reasoning: 80 } });
+    meter.finish();
+    assert.deepEqual([m.thinkMs, m.outputTokens, m.reasoningTokens], [3200, 120, 80]);
+
+    // 思考过程不公开：只在用量里报告思考 token，用开始写正文的时间当思考时长
+    now = 0;
+    const hidden: { reasoning?: string; thinkMs?: number; reasoningTokens?: number } = {};
+    const h = streamMeter(hidden);
+    now = 2500;
+    h.chunk({ content: '答案' });
+    h.chunk({ usage: { input: 10, output: 50, reasoning: 30 } });
+    h.finish();
+    assert.equal(hidden.thinkMs, 2500);
+
+    // 普通模型：没有思考，不记录
+    const plain: { reasoning?: string; thinkMs?: number } = {};
+    const pm = streamMeter(plain);
+    pm.chunk({ content: '你好' });
+    pm.finish();
+    assert.equal(plain.thinkMs, undefined);
+  } finally {
+    Date.now = realNow;
+  }
 });

@@ -2,6 +2,7 @@
 
 import { useEffect, useReducer, useState } from 'react';
 import type { Room, RoomEvent, RunnerState } from '../../shared/types';
+import { syncServerTime } from './clock';
 import { toast } from './toast';
 
 type State = { room: Room | null; runner: RunnerState | null };
@@ -30,6 +31,7 @@ function reducer(state: State, ev: RoomEvent | { type: 'reset' }): State {
                   content: m.content + (ev.content ?? ''),
                   reasoning: (m.reasoning ?? '') + (ev.reasoning ?? ''),
                   ...(ev.plan ? { plan: (m.plan ?? '') + ev.plan } : {}),
+                  ...(ev.thinkMs !== undefined ? { thinkMs: ev.thinkMs } : {}),
                 }
               : m,
           ),
@@ -62,7 +64,10 @@ export function useRoom(roomId: string | null) {
     es.onmessage = (e) => {
       const ev = JSON.parse(e.data) as RoomEvent;
       if (ev.type === 'notice') toast(ev.text, ev.level);
-      else dispatch(ev);
+      else {
+        if (ev.type === 'snapshot' && ev.now) syncServerTime(ev.now);
+        dispatch(ev);
+      }
     };
     return () => {
       es.close();

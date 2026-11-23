@@ -50,6 +50,32 @@ export interface ChatChunk {
   finish?: string;
 }
 
+/**
+ * 记录一次流式生成的思考时长和输出 token 数（界面上显示，免得以为卡住了）。
+ * 每个片段先拼进消息，再调用 chunk()；它返回刚算出的思考时长，随增量发给前端。
+ */
+export function streamMeter(message: { reasoning?: string; thinkMs?: number; outputTokens?: number; reasoningTokens?: number }) {
+  const start = Date.now();
+  let firstContentAt: number | undefined;
+  return {
+    chunk(c: ChatChunk): number | undefined {
+      if (c.usage?.output) message.outputTokens = c.usage.output;
+      if (c.usage?.reasoning) message.reasoningTokens = c.usage.reasoning;
+      if (c.content && firstContentAt === undefined) {
+        firstContentAt = Date.now();
+        if (message.reasoning?.trim()) return (message.thinkMs = firstContentAt - start);
+      }
+      return undefined;
+    },
+    /** 结束时补上：只思考没写正文，或者思考过程不公开（只在用量里报告了思考 token） */
+    finish() {
+      if (message.thinkMs !== undefined) return;
+      if (firstContentAt === undefined && message.reasoning?.trim()) message.thinkMs = Date.now() - start;
+      else if (firstContentAt !== undefined && message.reasoningTokens) message.thinkMs = firstContentAt - start;
+    },
+  };
+}
+
 /** 不接受 stream_options 的服务（报错过一次就记住，之后不再发送） */
 const noStreamOptions = new Set<string>();
 
@@ -676,6 +702,15 @@ async function* mockPlan(opts: ChatOptions, last: string): AsyncGenerator<ChatCh
   }
 }
 
+/** 模拟推理模型：先思考一会儿（够看到「思考中」和计时） */
+async function* mockThinking(opts: ChatOptions): AsyncGenerator<ChatChunk> {
+  if (!opts.model.includes('thinker')) return;
+  for (const piece of ['（模拟思考）', '先看看大家说了什么，', '想想谁的话前后矛盾，', '再想想我的立场', '和接下来要说的话。']) {
+    await sleep(300, opts.signal);
+    yield { reasoning: piece };
+  }
+}
+
 async function* mockReply(opts: ChatOptions): AsyncGenerator<ChatChunk> {
   const system = textOf(opts.messages.find((m) => m.role === 'system')?.content);
   const name = system.match(/你是「([^」]+)」/)?.[1];
@@ -697,6 +732,7 @@ async function* mockReply(opts: ChatOptions): AsyncGenerator<ChatChunk> {
   }
   if (system.includes('你正在和朋友们玩一局狼人杀')) {
     await sleep(40, opts.signal);
+    if (!last.includes('【任务：选择】') && !last.includes('【任务：是否上警】') && !last.includes('【任务：女巫用药】')) yield* mockThinking(opts);
     const me = Number(system.match(/你是 (\d+)号/)?.[1] ?? 0);
     const mates = [...(system.match(/你的狼队友：([^。]+)。/)?.[1] ?? '').matchAll(/(\d+)号/g)].map((m) => Number(m[1]));
     const options = [...(last.match(/可选：([^\n]+)/)?.[1] ?? '').matchAll(/(\d+)号/g)].map((m) => Number(m[1]));
@@ -826,12 +862,7 @@ async function* mockReply(opts: ChatOptions): AsyncGenerator<ChatChunk> {
     return;
   }
 
-  if (opts.model.includes('thinker')) {
-    for (const piece of ['（模拟思考）', '先看看大家说了什么，', '再想想我的立场。']) {
-      await sleep(80, opts.signal);
-      yield { reasoning: piece };
-    }
-  }
+  yield* mockThinking(opts);
 
   const quoted = last
     .replace(/（现在轮到你「[^」]*」发言）/g, '')
@@ -849,4 +880,6 @@ async function* mockReply(opts: ChatOptions): AsyncGenerator<ChatChunk> {
     await sleep(15, opts.signal);
     yield { content: ch };
   }
+  // 推理模型：像真实服务一样在最后报告用量（含思考 token）
+  if (opts.model.includes('thinker')) yield { usage: { input: 1200, output: estimateTokens(text) + 60, reasoning: 60 } };
 }

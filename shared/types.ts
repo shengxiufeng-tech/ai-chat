@@ -125,6 +125,12 @@ export interface Message {
   planning?: boolean;
   /** 构思失败的原因（这条由执笔模型单独写完） */
   planError?: string;
+  /** 思考用了多久（毫秒）：从开始生成到开始写正文 */
+  thinkMs?: number;
+  /** 服务商报告的输出 token 数（含思考），没有报告时界面上用估算值 */
+  outputTokens?: number;
+  /** 服务商报告的思考 token 数 */
+  reasoningTokens?: number;
 }
 
 export interface Room {
@@ -385,11 +391,11 @@ export interface TrpgCreateOptions {
 
 /** 服务端通过 SSE 推给前端的事件 */
 export type RoomEvent =
-  | { type: 'snapshot'; room: Room; runner: RunnerState }
+  | { type: 'snapshot'; room: Room; runner: RunnerState; /** 服务器时间，用来校正手机和电脑的时钟差 */ now?: number }
   | { type: 'room'; room: Omit<Room, 'messages'> }
   | { type: 'runner'; runner: RunnerState }
   | { type: 'message_added'; message: Message }
-  | { type: 'message_delta'; messageId: string; content?: string; reasoning?: string; plan?: string }
+  | { type: 'message_delta'; messageId: string; content?: string; reasoning?: string; plan?: string; thinkMs?: number }
   | { type: 'message_updated'; message: Message }
   | { type: 'message_deleted'; messageId: string }
   | { type: 'messages_cleared' }
