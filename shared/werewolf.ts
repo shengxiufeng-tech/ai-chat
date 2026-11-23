@@ -1,6 +1,8 @@
 // 狼人杀规则引擎（前后端共用）：角色、板子、发身份、夜晚结算、投票计票、胜负判定。
 // 这里只有纯函数和数据，不调用模型；流程由 server/werewolf.ts 驱动。
 
+import type { Message, Participant, Room } from './types.ts';
+
 export type WwRole = 'werewolf' | 'wolfking' | 'whitewolf' | 'seer' | 'witch' | 'hunter' | 'guard' | 'idiot' | 'knight' | 'villager';
 export type WwTeam = 'wolf' | 'god' | 'villager';
 
@@ -379,6 +381,27 @@ export function viewerOf(s: WerewolfState): WwViewer {
 export function narrationNeedsFacts(narration: string, facts: string) {
   const seats = (t: string) => [...new Set([...t.matchAll(/(\d+)\s*号/g)].map((m) => m[1]))].sort().join(',');
   return seats(narration) !== seats(facts);
+}
+
+/**
+ * 在「AI」页改了某个 AI 的名字、头像或颜色：座位和这一局里它说过的话一起改（座位号和身份不变）。
+ * 返回改动过的消息，好推给前端。
+ */
+export function syncSeatFromParticipant(room: Room, p: Participant): Message[] {
+  const ww = room.werewolf;
+  const seat = ww?.seats.find((s) => s.participantId === p.id);
+  if (!seat) return [];
+  seat.name = p.name;
+  seat.avatar = p.avatar;
+  const changed: Message[] = [];
+  for (const m of room.messages) {
+    if (m.participantId !== p.id) continue;
+    const speakerName = `${seatLabel(seat.seat)} ${p.name}`;
+    if (m.speakerName === speakerName && m.avatar === p.avatar && m.color === p.color) continue;
+    Object.assign(m, { speakerName, avatar: p.avatar, color: p.color });
+    changed.push(m);
+  }
+  return changed;
 }
 
 /** 「3号」这样的称呼 */

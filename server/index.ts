@@ -18,7 +18,7 @@ import { AccessControl, lanAddresses } from './access.ts';
 import { ImportManager } from './imports.ts';
 import { preparedFromTrpg, ScriptLibrary } from './library.ts';
 import { createWerewolfRoom, resetWerewolf } from './werewolf.ts';
-import { ROLE_INFO } from '../shared/werewolf.ts';
+import { ROLE_INFO, syncSeatFromParticipant } from '../shared/werewolf.ts';
 import { estimateTokens } from './context.ts';
 import { completeChat, completeChatWithUsage, listModels, primeModelCache, type ChatMessage } from './llm.ts';
 import { BUILTIN_TEMPLATES, ROOM_PRESETS } from './presets.ts';
@@ -709,8 +709,11 @@ app.patch(
       room.participants.splice(from, 1);
       room.participants.splice(to, 0, p);
     }
+    // 狼人杀：座位上的名字、头像，和这个 AI 说过的话一起改
+    const changed = room.mode === 'werewolf' ? syncSeatFromParticipant(room, p) : [];
     store.touchRoom(room.id, { immediate: true });
     emitRoom(room);
+    for (const message of changed) runners.get(room.id).emit({ type: 'message_updated', message });
     return p;
   }),
 );

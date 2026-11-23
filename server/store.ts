@@ -6,6 +6,7 @@ import { randomUUID } from 'node:crypto';
 import type { AppSettings, CharacterTemplate, Room, RoomSummary } from '../shared/types.ts';
 import { stripCommands } from '../shared/coc.ts';
 import { DEFAULT_ROOM_SETTINGS } from '../shared/types.ts';
+import { syncSeatFromParticipant } from '../shared/werewolf.ts';
 
 export const newId = () => randomUUID().replace(/-/g, '').slice(0, 12);
 
@@ -45,7 +46,11 @@ export function normalizeRoom(room: Room): Room {
     if (m.status === 'streaming') m.status = 'interrupted';
   }
   // 狼人杀：上次关闭时等人类做的决定作废（重新开始那一步时会再问一次）
-  if (room.werewolf) room.werewolf.pending = null;
+  if (room.werewolf) {
+    room.werewolf.pending = null;
+    // 旧版本改 AI 名字时座位上的名字不会跟着改：读取时补上
+    for (const p of room.participants) syncSeatFromParticipant(room, p);
+  }
   if (room.trpg) {
     room.trpg.assistantLog = room.trpg.assistantLog ?? [];
     room.trpg.sheets = room.trpg.sheets ?? {};

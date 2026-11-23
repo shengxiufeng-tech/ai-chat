@@ -1,7 +1,7 @@
 import { Check, ChevronDown } from 'lucide-react';
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import type { ModelInfo } from '../../../shared/types';
-import { refreshModelsIfStale, useModels } from '../models';
+import { useModels } from '../models';
 
 /** provider/model → [provider, model] */
 function splitId(id: string): [string, string] {
@@ -69,8 +69,6 @@ export function ModelInput({
   const showGroups = query === null;
 
   const openList = (q: string | null) => {
-    // 打开下拉时列表超过 15 秒就在后台刷新，在 Magpie 里新加的模型马上能选
-    if (!open) refreshModelsIfStale(15_000);
     setQuery(q);
     setOpen(true);
     const items = q === null ? grouped : filterModels(models, q);

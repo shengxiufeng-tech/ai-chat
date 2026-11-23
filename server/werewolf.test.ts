@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
-import { BOARDS, isWolf, narrationNeedsFacts, type WerewolfState } from '../shared/werewolf.ts';
+import { BOARDS, isWolf, narrationNeedsFacts, syncSeatFromParticipant, type WerewolfState } from '../shared/werewolf.ts';
 import { RunnerManager } from './runner.ts';
 import { Store } from './store.ts';
 import { createWerewolfRoom, guessKill, humanPrompt, parseChoice, resetWerewolf, parseSpeechActions, playerMessages, type WerewolfCreateOptions } from './werewolf.ts';
@@ -316,6 +316,36 @@ test('白痴被投票放逐：翻牌免死，之后不能投票', async () => {
       assert.ok(vote, '之后有一轮投票');
     }
     if (vote) assert.ok(!vote.ww!.votes!.some((v) => v.voter === idiot.seat), '翻牌的白痴不在投票名单里');
+  } finally {
+    await ctx.cleanup();
+  }
+});
+
+test('在「AI」页改了名字和头像：座位和这一局说过的话一起改，读取旧房间时也会补上', async () => {
+  const ctx = setup({ boardId: 'six', join: false, sheriff: false });
+  try {
+    const ww = ctx.room.werewolf!;
+    const seat = ww.seats[0];
+    const p = ctx.room.participants.find((x) => x.id === seat.participantId)!;
+    ctx.room.messages.push({ id: 'm1', role: 'ai', participantId: p.id, speakerName: `${seat.seat}号 ${p.name}`, avatar: p.avatar, color: p.color, content: '我是好人。', status: 'done', createdAt: 0, ww: { type: 'announce', seat: seat.seat, speech: 'speech' } });
+    Object.assign(p, { name: 'DeepSeek', avatar: '🐳' });
+    const changed = syncSeatFromParticipant(ctx.room, p);
+    assert.equal(seat.name, 'DeepSeek');
+    assert.equal(seat.avatar, '🐳');
+    assert.equal(changed.length, 1);
+    assert.equal(ctx.room.messages[0].speakerName, `${seat.seat}号 DeepSeek`);
+    assert.match(playerMessages(ctx.room, ww.seats[1].seat).map((m) => m.content).join('\n'), new RegExp(`【${seat.seat}号 DeepSeek】`), 'AI 们看到的也是新名字');
+    assert.deepEqual(syncSeatFromParticipant(ctx.room, p), [], '没变化时不重复推送');
+
+    // 旧版本留下的房间：座位名字和 AI 名字对不上，重新读取时补上
+    seat.name = '旧名字';
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-chat-ww-sync-'));
+    const store = new Store(dir);
+    store.addRoom(structuredClone(ctx.room));
+    store.flushAll();
+    const reloaded = new Store(dir).getRoom(ctx.room.id)!;
+    assert.equal(reloaded.werewolf!.seats[0].name, 'DeepSeek');
+    fs.rmSync(dir, { recursive: true, force: true });
   } finally {
     await ctx.cleanup();
   }
