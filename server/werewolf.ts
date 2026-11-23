@@ -21,6 +21,7 @@ import {
   shuffle,
   speechOrder,
   tallyVotes,
+  revealText,
   wolfCount,
   wolfTarget,
   BOARDS,
@@ -1075,9 +1076,8 @@ export class WerewolfGame {
         ww.tasks = [];
         const winner = ww.winner ?? checkWinner(ww) ?? 'village';
         ww.winner = winner;
-        const reveal = ww.seats.map((s) => `${seatLabel(s.seat)} ${s.name}：${ROLE_INFO[s.role].name}`).join('；');
         await this.narrate(`游戏结束，${winner === 'wolf' ? '狼人阵营' : '好人阵营'}获胜！`, 'end');
-        this.judge(`身份公开：${reveal}。`, 'end');
+        this.judge(revealText(ww), 'end', 'public', { reveal: true });
         return;
       }
     }

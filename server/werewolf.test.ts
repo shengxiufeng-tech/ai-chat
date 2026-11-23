@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
-import { BOARDS, isWolf, narrationNeedsFacts, syncSeatFromParticipant, type WerewolfState } from '../shared/werewolf.ts';
+import { BOARDS, isWolf, narrationNeedsFacts, revealText, syncSeatFromParticipant, type WerewolfState } from '../shared/werewolf.ts';
 import { RunnerManager } from './runner.ts';
 import { Store } from './store.ts';
 import { createWerewolfRoom, guessKill, humanPrompt, parseChoice, resetWerewolf, parseSpeechActions, playerMessages, type WerewolfCreateOptions } from './werewolf.ts';
@@ -328,11 +328,17 @@ test('在「AI」页改了名字和头像：座位和这一局说过的话一起
     const seat = ww.seats[0];
     const p = ctx.room.participants.find((x) => x.id === seat.participantId)!;
     ctx.room.messages.push({ id: 'm1', role: 'ai', participantId: p.id, speakerName: `${seat.seat}号 ${p.name}`, avatar: p.avatar, color: p.color, content: '我是好人。', status: 'done', createdAt: 0, ww: { type: 'announce', seat: seat.seat, speech: 'speech' } });
+    // 旧版本的「身份公开」消息没有 reveal 标记
+    ctx.room.messages.push({ id: 'end', role: 'system', kind: 'ww', speakerName: '法官', content: revealText(ww), status: 'done', createdAt: 0, visibility: 'public', ww: { type: 'end' } });
+    const oldName = p.name;
     Object.assign(p, { name: 'DeepSeek', avatar: '🐳' });
     const changed = syncSeatFromParticipant(ctx.room, p);
     assert.equal(seat.name, 'DeepSeek');
     assert.equal(seat.avatar, '🐳');
-    assert.equal(changed.length, 1);
+    assert.equal(changed.length, 2, '发言和身份公开都改了');
+    const reveal = ctx.room.messages.find((m) => m.id === 'end')!.content;
+    assert.match(reveal, new RegExp(`${seat.seat}号 DeepSeek：`));
+    assert.doesNotMatch(reveal, new RegExp(oldName));
     assert.equal(ctx.room.messages[0].speakerName, `${seat.seat}号 DeepSeek`);
     assert.match(playerMessages(ctx.room, ww.seats[1].seat).map((m) => m.content).join('\n'), new RegExp(`【${seat.seat}号 DeepSeek】`), 'AI 们看到的也是新名字');
     assert.deepEqual(syncSeatFromParticipant(ctx.room, p), [], '没变化时不重复推送');

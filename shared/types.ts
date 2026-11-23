@@ -163,6 +163,8 @@ export interface WwMessageInfo {
   speech?: 'speech' | 'pk' | 'lastWords' | 'sheriffSpeech' | 'wolfchat';
   /** AI 主持人播报时，程序给出的准确结果（AI 玩家读的是这一句；播报和它对不上时界面上也会显示） */
   facts?: string;
+  /** 游戏结束时的「身份公开」：改了 AI 的名字时按最新的名字重新生成 */
+  reveal?: boolean;
 }
 
 /** 一次请求的 token 用量 */

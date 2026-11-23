@@ -395,6 +395,15 @@ export function syncSeatFromParticipant(room: Room, p: Participant): Message[] {
   seat.avatar = p.avatar;
   const changed: Message[] = [];
   for (const m of room.messages) {
+    // 游戏结束时的「身份公开」里写着每个人的名字（旧版本的消息没有 reveal 标记，按开头认）
+    if (m.kind === 'ww' && (m.ww?.reveal || m.content.startsWith('身份公开：'))) {
+      const content = revealText(ww!);
+      if (m.content !== content) {
+        m.content = content;
+        changed.push(m);
+      }
+      continue;
+    }
     if (m.participantId !== p.id) continue;
     const speakerName = `${seatLabel(seat.seat)} ${p.name}`;
     if (m.speakerName === speakerName && m.avatar === p.avatar && m.color === p.color) continue;
@@ -402,6 +411,11 @@ export function syncSeatFromParticipant(room: Room, p: Participant): Message[] {
     changed.push(m);
   }
   return changed;
+}
+
+/** 游戏结束时公开所有人的身份 */
+export function revealText(ww: WerewolfState) {
+  return `身份公开：${ww.seats.map((s) => `${seatLabel(s.seat)} ${s.name}：${ROLE_INFO[s.role].name}`).join('；')}。`;
 }
 
 /** 「3号」这样的称呼 */
