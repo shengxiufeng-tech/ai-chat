@@ -160,6 +160,26 @@ export function resetWerewolf(room: Room, rng: () => number = Math.random) {
 
 // ---------------- 给 AI 的提示词 ----------------
 
+const LAST_WORDS_RULE = '第一夜出局、被投票放逐、被开枪带走的玩家有遗言；之后夜里出局、自爆、决斗出局的没有遗言。';
+
+/** 每次都附上的本局规则摘要（板子、胜利条件、警长、公布方式、遗言），免得 AI 按自己印象里的规则来 */
+function ruleSummary(ww: WerewolfState) {
+  const sheriff = !ww.sheriffEnabled
+    ? '本局不竞选警长，没有警长也没有警徽，每个人的投票都算 1 票'
+    : ww.sheriff
+      ? `本局有警长，现在的警长是 ${seatLabel(ww.sheriff)}（投票算 1.5 票，白天最后发言，出局时移交或撕掉警徽）`
+      : ww.sheriffDone
+        ? '本局有警长竞选，但现在没有警长（警徽已经流失或被撕掉），每个人的投票都算 1 票'
+        : '本局第一天白天竞选警长（警长投票算 1.5 票，白天最后发言）';
+  return [
+    `${ww.seats.length} 人局，角色只有：${rolesText(ww.roles)}，没有其他角色`,
+    ww.winRule === 'edge' ? '屠边：狼人杀光所有神职或者所有平民就获胜，好人放逐或杀死所有狼人获胜' : '屠城：狼人杀光所有好人才获胜，好人放逐或杀死所有狼人获胜',
+    sheriff,
+    '出局时不公布身份，夜里出局不公布死因',
+    LAST_WORDS_RULE.replace(/。$/, ''),
+  ].join('；') + '。';
+}
+
 const winText = (ww: WerewolfState) =>
   ww.winRule === 'edge' ? '狼人杀光所有神职或者所有平民就获胜（屠边）；好人放逐或杀死所有狼人就获胜' : '狼人杀光所有好人才获胜（屠城）；好人放逐或杀死所有狼人就获胜';
 
@@ -167,8 +187,10 @@ function rulesText(ww: WerewolfState) {
   const has = (r: keyof typeof ROLE_INFO) => (ww.roles[r] ?? 0) > 0;
   const lines = [
     '- 每晚狼人一起选一名玩家杀害；天亮后法官公布昨晚出局的玩家（不公布死因）。',
-    ww.sheriffEnabled ? '- 第一天白天先竞选警长：想当的人上警发言，其他人投票。警长投票算 1.5 票，白天最后一个发言；警长出局时可以把警徽交给别人或者撕掉。' : '',
-    '- 白天按顺序每人发言一次，然后所有人投票放逐一名玩家；平票的玩家再各发言一次，其他人重新投票，再平票就没人出局。被放逐的玩家有遗言；第一夜出局的玩家也有遗言。',
+    ww.sheriffEnabled
+      ? '- 第一天白天先竞选警长：想当的人上警发言，其他人投票。警长投票算 1.5 票，白天最后一个发言；警长出局时可以把警徽交给别人或者撕掉。'
+      : '- 本局不竞选警长：没有警长，也没有警徽，每个人的投票都算 1 票。不要提警长、警徽、上警。',
+    `- 白天按顺序每人发言一次，然后所有人投票放逐一名玩家；平票的玩家再各发言一次，其他人重新投票，再平票就没人出局。${LAST_WORDS_RULE}`,
     has('witch') ? '- 女巫：一瓶解药一瓶毒药，各用一次，同一晚只能用一瓶，不能救自己；用掉解药以后就不知道每晚谁被杀了。' : '',
     has('guard') ? '- 守卫：每晚守护一人，不能连续两晚守同一个人；同一个人被守卫守护又被女巫救，仍然会出局。' : '',
     has('hunter') || has('wolfking') ? '- 猎人和狼王出局时可以开枪带走一名玩家，但被毒死不能开枪。' : '',
@@ -276,6 +298,7 @@ function stateBlock(room: Room, x: WwSeat) {
   }
   if (x.role === 'knight') mine.push(ww.knightUsed ? '你已经用过决斗' : '你的决斗还没用');
   return [
+    `【本局规则】${ruleSummary(ww)}`,
     `【当前局面】第 ${ww.day} 天${ww.phase === 'night' ? '夜里' : '白天'}。存活 ${living.length} 人：${living.map((s) => `${seatLabel(s.seat)}${s.idiotRevealed ? '（白痴，已翻牌，不能投票）' : ''}`).join('、')}。${dead.length ? `出局：${dead.join('、')}。` : ''}${ww.sheriff ? `警长：${seatLabel(ww.sheriff)}。` : ''}`,
     `【公开信息】${facts.filter(Boolean).join('')}`,
     `【你】${seatLabel(x.seat)}「${x.name}」，身份${ROLE_INFO[x.role].name}${x.alive ? '' : '（你已经出局）'}。${mine.join('。')}${mine.length ? '。' : ''}`,

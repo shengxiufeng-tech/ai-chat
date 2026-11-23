@@ -242,6 +242,32 @@ test('AI 知道公开的大局：狼人总数、公开的身份、还剩几名�
   }
 });
 
+test('本局规则每次都告诉 AI：没开警长的局明确说没有警长和警徽', async () => {
+  const off = setup({ boardId: 'nine', join: false, sheriff: false });
+  const on = setup({ boardId: 'nine', join: false, sheriff: true });
+  try {
+    const msgs = (room: typeof off.room) => playerMessages(room, 1, '【任务：发言】');
+    const sys = (room: typeof off.room) => msgs(room)[0].content;
+    const tail = (room: typeof off.room) => msgs(room).at(-1)!.content;
+
+    assert.match(sys(off.room), /本局不竞选警长：没有警长，也没有警徽/);
+    assert.match(tail(off.room), /【本局规则】9 人局，角色只有：3 狼人、预言家、女巫、猎人、3 平民，没有其他角色/);
+    assert.match(tail(off.room), /本局不竞选警长，没有警长也没有警徽，每个人的投票都算 1 票/);
+    assert.match(tail(off.room), /屠边/);
+    assert.match(tail(off.room), /被开枪带走的玩家有遗言/);
+
+    assert.doesNotMatch(sys(on.room), /不竞选警长/);
+    assert.match(tail(on.room), /本局第一天白天竞选警长/);
+    on.room.werewolf!.sheriff = 4;
+    assert.match(tail(on.room), /现在的警长是 4号/);
+    Object.assign(on.room.werewolf!, { sheriff: null, sheriffDone: true });
+    assert.match(tail(on.room), /现在没有警长（警徽已经流失或被撕掉）/);
+  } finally {
+    await off.cleanup();
+    await on.cleanup();
+  }
+});
+
 test('白痴被投票放逐：翻牌免死，之后不能投票', async () => {
   const ctx = setup({ boardId: 'twelve-idiot', join: false, sheriff: false });
   try {
