@@ -7,7 +7,7 @@ import { test } from 'node:test';
 import { BOARDS, isWolf, narrationNeedsFacts, revealText, syncSeatFromParticipant, type WerewolfState } from '../shared/werewolf.ts';
 import { RunnerManager } from './runner.ts';
 import { Store } from './store.ts';
-import { createWerewolfRoom, guessKill, humanPrompt, parseChoice, resetWerewolf, parseSpeechActions, playerMessages, type WerewolfCreateOptions } from './werewolf.ts';
+import { createWerewolfRoom, guessKill, humanPrompt, onWerewolfRequest, parseChoice, resetWerewolf, parseSpeechActions, playerMessages, type WerewolfCreateOptions } from './werewolf.ts';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -353,6 +353,70 @@ test('在「AI」页改了名字和头像：座位和这一局说过的话一起
     assert.equal(reloaded.werewolf!.seats[0].name, 'DeepSeek');
     fs.rmSync(dir, { recursive: true, force: true });
   } finally {
+    await ctx.cleanup();
+  }
+});
+
+test('提示缓存：每个座位的每次请求都是上一次请求 + 模型的回复原样不动，再往后追加', async () => {
+  for (const boardId of ['nine', 'whitewolf']) {
+    const ctx = setup({ boardId, join: false, sheriff: true });
+    const sent = new Map<number, { role: string; content: string }[][]>();
+    onWerewolfRequest((roomId, seat, messages) => {
+      if (roomId !== ctx.room.id) return;
+      sent.set(seat, [...(sent.get(seat) ?? []), structuredClone(messages)]);
+    });
+    try {
+      await playOut(ctx);
+      const ww = ctx.room.werewolf!;
+      let checked = 0;
+      for (const [seat, reqs] of sent) {
+        for (let k = 1; k < reqs.length; k++) {
+          const a = reqs[k - 1];
+          const b = reqs[k];
+          assert.deepEqual(b[0], a[0], `${seat}号的系统提示词不变`);
+          assert.ok(b.length >= a.length + 2, `${seat}号第 ${k + 1} 次请求比上一次长`);
+          assert.deepEqual(b.slice(0, a.length), a, `${seat}号第 ${k + 1} 次请求的前缀和上一次一字不差`);
+          assert.equal(b[a.length].role, 'assistant', '紧接着是模型上一轮的回复');
+          assert.equal(b.at(-1)!.role, 'user');
+          checked++;
+        }
+        // 信息隔离：好人收到的内容里没有狼队夜聊
+        const role = ww.seats.find((s) => s.seat === seat)!.role;
+        const all = reqs.at(-1)!.map((m) => m.content).join('\n');
+        if (!isWolf(role)) assert.doesNotMatch(all, /狼队夜聊|【狼队频道】|模拟狼人/, `${seat}号（${role}）看不到狼队频道`);
+        else assert.match(all, /狼队夜聊|【狼队频道】/);
+      }
+      assert.ok(checked > 20, `检查了 ${checked} 对相邻请求`);
+    } finally {
+      onWerewolfRequest(undefined);
+      await ctx.cleanup();
+    }
+  }
+});
+
+test('再来一局：重新拼一次对话，不会把上一局的内容带进来', async () => {
+  const ctx = setup({ boardId: 'six', join: false, sheriff: false });
+  const firstLen = new Map<number, number>();
+  onWerewolfRequest((roomId, seat, messages) => {
+    if (roomId === ctx.room.id && !firstLen.has(seat)) firstLen.set(seat, messages.length);
+  });
+  try {
+    await playOut(ctx);
+    resetWerewolf(ctx.room);
+    firstLen.clear();
+    ctx.room.werewolf!.pace = 0;
+    ctx.runner.run();
+    for (let i = 0; i < 500 && firstLen.size < 2; i++) await sleep(5);
+    ctx.runner.stop();
+    await sleep(50);
+    assert.ok(firstLen.size > 0);
+    for (const [seat, n] of firstLen) assert.equal(n, 2, `${seat}号新一局的第一次请求只有系统提示词和一条消息`);
+
+    // 接着把新的一局打完
+    await playOut(ctx);
+    assert.ok(ctx.room.werewolf!.winner);
+  } finally {
+    onWerewolfRequest(undefined);
     await ctx.cleanup();
   }
 });

@@ -17,7 +17,7 @@ import { DEFAULT_ROOM_SETTINGS } from '../shared/types.ts';
 import { AccessControl, lanAddresses } from './access.ts';
 import { ImportManager } from './imports.ts';
 import { preparedFromTrpg, ScriptLibrary } from './library.ts';
-import { createWerewolfRoom, resetWerewolf } from './werewolf.ts';
+import { createWerewolfRoom, forgetTranscripts, resetWerewolf } from './werewolf.ts';
 import { ROLE_INFO, syncSeatFromParticipant } from '../shared/werewolf.ts';
 import { estimateTokens } from './context.ts';
 import { completeChat, completeChatWithUsage, listModels, primeModelCache, type ChatMessage } from './llm.ts';
@@ -665,6 +665,7 @@ app.delete(
     getRoom(id);
     runners.remove(id);
     store.deleteRoom(id);
+    forgetTranscripts(id);
     fs.rmSync(assetsDir(id), { recursive: true, force: true });
   }),
 );

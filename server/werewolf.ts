@@ -138,6 +138,7 @@ export function createWerewolfRoom(o: WerewolfCreateOptions, defaultModel: strin
 export function resetWerewolf(room: Room, rng: () => number = Math.random) {
   const ww = room.werewolf!;
   const deck = dealRoles(ww.roles, rng);
+  transcripts.delete(room.id);
   ww.seats = ww.seats.map((s, i) => ({ seat: s.seat, name: s.name, avatar: s.avatar, participantId: s.participantId, human: s.human, role: deck[i], alive: true }));
   Object.assign(ww, {
     sheriff: null,
@@ -229,29 +230,37 @@ function systemPrompt(room: Room, x: WwSeat, p: Participant) {
     .join('\n');
 }
 
+/** 一条对局记录在这个座位眼里是什么：别人的话和法官消息是 user，自己的发言是 assistant；看不到的是 null */
+function eventFor(room: Room, x: WwSeat, m: Message): ChatMessage | null {
+  if (m.status === 'streaming' || m.status === 'error' || !m.content.trim()) return null;
+  if (!canSee(m.visibility, { god: false, seat: x.seat, wolf: isWolf(x.role) })) return null;
+  const seat = m.ww?.seat;
+  if (m.kind === 'ww') {
+    const text = m.ww?.facts ?? m.content;
+    return { role: 'user', content: m.visibility?.startsWith('seat:') ? `【只有你知道】${text}` : m.visibility === 'wolves' ? `【狼队频道】${text}` : `【法官】${text}` };
+  }
+  if (seat === x.seat) return { role: 'assistant', content: m.content.trim() };
+  if (seat == null) return null;
+  const who = `${seatLabel(seat)} ${seatOf(room.werewolf!, seat)?.name ?? ''}`.trim();
+  const tag = m.ww?.speech === 'wolfchat' ? `狼队夜聊 · ${who}` : m.ww?.speech === 'lastWords' ? `${who} 的遗言` : m.ww?.speech === 'sheriffSpeech' ? `${who}（警长竞选发言）` : who;
+  return { role: 'user', content: `【${tag}】：${m.content.trim()}` };
+}
+
+/** 可以发给模型的记录到哪一条为止：遇到还在生成的消息就停（说完以后下一轮再发） */
+function readyCount(room: Room) {
+  const i = room.messages.findIndex((m) => m.status === 'streaming');
+  return i < 0 ? room.messages.length : i;
+}
+
 /** 这个座位能看到的对局记录 → 发给模型的消息（自己的发言是 assistant） */
-function historyFor(room: Room, x: WwSeat): ChatMessage[] {
-  const viewer = { god: false, seat: x.seat, wolf: isWolf(x.role) };
+function historyFor(room: Room, x: WwSeat, end = readyCount(room)): ChatMessage[] {
   const turns: ChatMessage[] = [];
-  const push = (role: 'user' | 'assistant', content: string) => {
+  for (const m of room.messages.slice(0, end)) {
+    const e = eventFor(room, x, m);
+    if (!e) continue;
     const last = turns[turns.length - 1];
-    if (last && last.role === role) last.content += `\n\n${content}`;
-    else turns.push({ role, content });
-  };
-  for (const m of room.messages) {
-    if (m.status === 'streaming' || m.status === 'error' || !m.content.trim()) continue;
-    if (!canSee(m.visibility, viewer)) continue;
-    const seat = m.ww?.seat;
-    if (m.kind === 'ww') {
-      const text = m.ww?.facts ?? m.content;
-      push('user', m.visibility?.startsWith('seat:') ? `【只有你知道】${text}` : m.visibility === 'wolves' ? `【狼队频道】${text}` : `【法官】${text}`);
-    } else if (seat === x.seat) {
-      push('assistant', m.content.trim());
-    } else if (seat != null) {
-      const who = `${seatLabel(seat)} ${seatOf(room.werewolf!, seat)?.name ?? ''}`.trim();
-      const tag = m.ww?.speech === 'wolfchat' ? `狼队夜聊 · ${who}` : m.ww?.speech === 'lastWords' ? `${who} 的遗言` : m.ww?.speech === 'sheriffSpeech' ? `${who}（警长竞选发言）` : who;
-      push('user', `【${tag}】：${m.content.trim()}`);
-    }
+    if (last && last.role === e.role) last.content += `\n\n${e.content}`;
+    else turns.push(e);
   }
   return turns;
 }
@@ -312,13 +321,72 @@ function stateBlock(room: Room, x: WwSeat) {
   ].join('\n');
 }
 
-function buildMessages(room: Room, x: WwSeat, p: Participant, task: string): ChatMessage[] {
-  const turns = historyFor(room, x);
-  const tail = `${stateBlock(room, x)}\n\n${task}`;
+/** 从对局记录重新拼出这个座位的完整对话（第一次请求、或者记录被删改过时用） */
+function freshTurns(room: Room, x: WwSeat, tail: string, end: number): ChatMessage[] {
+  const turns = historyFor(room, x, end);
   const last = turns[turns.length - 1];
   if (last && last.role === 'user') last.content += `\n\n${tail}`;
   else turns.push({ role: 'user', content: tail });
-  return [{ role: 'system', content: systemPrompt(room, x, p) }, ...turns];
+  return turns;
+}
+
+function buildMessages(room: Room, x: WwSeat, p: Participant, task: string): ChatMessage[] {
+  return [{ role: 'system', content: systemPrompt(room, x, p) }, ...freshTurns(room, x, `${stateBlock(room, x)}\n\n${task}`, readyCount(room))];
+}
+
+/**
+ * 每个座位和模型的完整对话：之前发过的消息和模型的原话一字不改地留着，新一轮只在后面追加。
+ * Magpie 发现历史和上一轮对不上时会新开会话、重放上下文，提示缓存就全部失效，
+ * 所以不能每轮从对局记录重新拼（上一轮附在最后的局面和任务会消失）。
+ * 只存在内存里：服务重启后第一轮重新拼一次，之后照样只追加。
+ */
+interface SeatTranscript {
+  turns: ChatMessage[];
+  /** 已经发给这个座位的最后一条对局记录 */
+  upTo: string | null;
+}
+const transcripts = new Map<string, Map<number, SeatTranscript>>();
+
+/** 删除房间时把它的对话也丢掉 */
+export function forgetTranscripts(roomId: string) {
+  transcripts.delete(roomId);
+}
+
+/** 测试用：每次请求模型前看一眼发出去的消息 */
+let requestHook: ((roomId: string, seat: number, messages: ChatMessage[]) => void) | undefined;
+export function onWerewolfRequest(fn: typeof requestHook) {
+  requestHook = fn;
+}
+
+/** 这个座位这一轮要发给模型的消息，以及请求成功后把模型的原话记下来的 commit */
+function seatTurn(room: Room, x: WwSeat, p: Participant, task: string, { withState = true } = {}) {
+  let bySeat = transcripts.get(room.id);
+  if (!bySeat) transcripts.set(room.id, (bySeat = new Map()));
+  const end = readyCount(room);
+  const upTo = end > 0 ? room.messages[end - 1].id : null;
+  const tail = withState ? `${stateBlock(room, x)}\n\n${task}` : task;
+  const prev = bySeat.get(x.seat);
+  const prevIndex = prev?.upTo == null ? -1 : room.messages.findIndex((m) => m.id === prev.upTo);
+  let turns: ChatMessage[];
+  if (prev && (prev.upTo === null || prevIndex >= 0)) {
+    // 只追加上一轮之后的新记录（自己的发言已经作为模型的原话记下了）
+    const fresh = room.messages
+      .slice(prevIndex + 1, end)
+      .map((m) => eventFor(room, x, m))
+      .filter((e): e is ChatMessage => !!e && e.role === 'user')
+      .map((e) => e.content);
+    turns = [...prev.turns, { role: 'user', content: [...fresh, tail].join('\n\n') }];
+  } else {
+    turns = freshTurns(room, x, tail, end);
+  }
+  const messages: ChatMessage[] = [{ role: 'system', content: systemPrompt(room, x, p) }, ...turns];
+  requestHook?.(room.id, x.seat, messages);
+  return {
+    messages,
+    commit(reply: string) {
+      if (reply) bySeat.set(x.seat, { turns: [...turns, { role: 'assistant', content: reply }], upTo });
+    },
+  };
 }
 
 const list = (seats: number[]) => seats.map(seatLabel).join('、');
@@ -588,12 +656,13 @@ export class WerewolfGame {
   }
 
   /** 让 AI 做一个决定：只回复一行「【选择:N号】」；看不懂时再问一次，还不行就随机 */
-  private async aiDecide(x: WwSeat, task: string): Promise<string> {
+  private async aiDecide(x: WwSeat, task: string, opts: { withState?: boolean } = {}): Promise<string> {
     const p = this.participantOf(x);
     const settings = this.host.store.getSettings();
     this.controller ??= new AbortController();
     const signal = this.controller.signal;
-    return completeChat({
+    const turn = seatTurn(this.room, x, p, task, opts);
+    const text = await completeChat({
       baseUrl: settings.baseUrl,
       apiKey: settings.apiKey,
       model: p.model || settings.defaultModel,
@@ -601,8 +670,10 @@ export class WerewolfGame {
       temperature: p.temperature,
       sessionId: `ai-chat-${this.host.roomId}-${p.id}`,
       signal,
-      messages: buildMessages(this.room, x, p, task),
+      messages: turn.messages,
     });
+    turn.commit(text);
+    return text;
   }
 
   /** 选一个座位（或者不选） */
@@ -616,7 +687,9 @@ export class WerewolfGame {
     }
     const task = `【任务：选择】${prompt}\n可选：${list(options)}${allowSkip ? '，或者「不选」' : ''}。\n只回复一行：【选择:N号】${allowSkip ? '（或者【选择:不选】）' : ''}，可以在下一行用一句话说明理由（不会公开）。`;
     for (let i = 0; i < 2; i++) {
-      const text = await this.aiDecide(x, i ? `${task}\n（上次的回复格式不对，这次只回复【选择:N号】）` : task);
+      // 格式不对时接着上一轮问（不重复局面），对话前缀不变
+      const retry = `上次的回复格式不对。只回复一行：【选择:N号】${allowSkip ? '（或者【选择:不选】）' : ''}。可选：${list(options)}。`;
+      const text = await this.aiDecide(x, i ? retry : task, { withState: i === 0 });
       const c = parseChoice(text, options, allowSkip);
       if (c !== undefined) return c;
     }
@@ -656,6 +729,8 @@ export class WerewolfGame {
     const controller = new AbortController();
     this.controller = controller;
     const meter = streamMeter(msg);
+    // 这条发言消息已经加进记录了，但它还在生成，不会被当作「新记录」发出去
+    const turn = seatTurn(this.room, x, p, task);
     try {
       for await (const chunk of streamChat({
         baseUrl: settings.baseUrl,
@@ -665,7 +740,7 @@ export class WerewolfGame {
         temperature: p.temperature,
         sessionId: `ai-chat-${this.host.roomId}-${p.id}`,
         signal: controller.signal,
-        messages: buildMessages(this.room, x, p, task),
+        messages: turn.messages,
       })) {
         if (chunk.content) msg.content += chunk.content;
         if (chunk.reasoning) msg.reasoning += chunk.reasoning;
@@ -684,6 +759,8 @@ export class WerewolfGame {
       this.controller = null;
       this.host.setGenerating(null);
     }
+    // 模型的原话（含【刀:N号】等标记）原样记进这个座位的对话，下一轮前缀才对得上
+    turn.commit(msg.content);
     const r = parseSpeechActions(msg.content.replace(/<think>[\s\S]*?<\/think>/g, ''));
     if (r.kill === undefined && extra.killOptions) r.kill = guessKill(r.content, msg.reasoning ?? '', extra.killOptions);
     msg.content = r.content || '（没有说话）';
