@@ -133,6 +133,15 @@ export interface Message {
   reasoningTokens?: number;
 }
 
+/** 某个 AI 的上下文裁剪点：从哪条消息开始发给它，以及之前那些消息整理成的前情提要 */
+export interface ContextCut {
+  /** 发给它的第一条消息 */
+  from: string;
+  /** 之前的对话整理成的前情提要（从这个 AI 的视角写的；整理失败时没有） */
+  summary?: string;
+  at: number;
+}
+
 export interface Room {
   id: string;
   mode: RoomMode;
@@ -148,6 +157,8 @@ export interface Room {
   werewolf?: WerewolfState;
   createdAt: number;
   updatedAt: number;
+  /** 对话超过上下文时，每个 AI 的裁剪点和前情提要（key 是参与者 id，构思模型是「id:plan」） */
+  contextCuts?: Record<string, ContextCut>;
 }
 
 /** 狼人杀里法官发出的消息 */

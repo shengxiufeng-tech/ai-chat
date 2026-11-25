@@ -911,7 +911,13 @@ export function resolveGrowth(r: RollRecord, sheet: InvestigatorSheet, rng: Rng 
 }
 
 /** 给守秘人 / 队友看的角色卡摘要 */
-export function sheetSummary(s: InvestigatorSheet, era: Era = '1920s'): string {
+/** 最常变、也最要紧的数值：每轮都单独附一行 */
+export function sheetVitals(s: InvestigatorSheet): string {
+  return `「${s.name}」HP ${s.hp.current}/${s.hp.max}，MP ${s.mp.current}/${s.mp.max}，SAN ${s.san.current}/${s.san.max}，幸运 ${s.luck}`;
+}
+
+/** 角色卡摘要；vitals: false 时不含 HP / MP / SAN / 幸运（它们另外每轮单独附） */
+export function sheetSummary(s: InvestigatorSheet, era: Era = '1920s', { vitals = true } = {}): string {
   const c = s.characteristics;
   const chars = CHAR_KEYS.map((k) => `${CHAR_NAMES[k]}${c[k]}`).join(' ');
   const notable = Object.entries(s.skills)
@@ -922,7 +928,7 @@ export function sheetSummary(s: InvestigatorSheet, era: Era = '1920s'): string {
     .join('、');
   return [
     `「${s.name}」${s.gender ? `，${s.gender}` : ''}，${s.age} 岁，${s.occupation}`,
-    `HP ${s.hp.current}/${s.hp.max}，MP ${s.mp.current}/${s.mp.max}，SAN ${s.san.current}/${s.san.max}，幸运 ${s.luck}`,
+    vitals ? `HP ${s.hp.current}/${s.hp.max}，MP ${s.mp.current}/${s.mp.max}，SAN ${s.san.current}/${s.san.max}，幸运 ${s.luck}` : '',
     `属性：${chars}，移动力 ${s.mov}，伤害加值 ${s.damageBonus}`,
     `主要技能：${notable || '（无）'}（其他技能为基础值）`,
     `物品：${s.items.length ? s.items.join('、') : '（无）'}`,

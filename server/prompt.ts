@@ -1,7 +1,12 @@
 // 提示词构建：每个 AI 从自己的视角看对话历史
 
 import type { Message, Participant, Room } from '../shared/types.ts';
+import { estimateTokens } from '../shared/tokens.ts';
 import type { ChatMessage } from './llm.ts';
+
+/** 距离上次完整状态超过这么多轮自己的发言、或者这么多 token，就再附一次完整状态（弱一点的模型不用往前翻太远） */
+export const STATE_REFRESH_TURNS = 15;
+export const STATE_REFRESH_TOKENS = 10_000;
 
 const ROLE_LABEL = {
   host: '主持人',
@@ -109,7 +114,10 @@ export interface BuildOut {
 /** 很多接口要求 user / assistant 交替出现，同一方连续的消息合并成一条 */
 export function turnBuilder(cache?: PromptCache) {
   const turns: ChatMessage[] = [];
+  // 距离最近一次完整状态：自己说了几轮、后面又有多少内容
+  const since = { turns: 0, tokens: 0 };
   const push = (role: 'user' | 'assistant', content: string) => {
+    since.tokens += estimateTokens(content);
     const last = turns[turns.length - 1];
     if (last && last.role === role) last.content += `\n\n${content}`;
     else turns.push({ role, content });
@@ -127,18 +135,24 @@ export function turnBuilder(cache?: PromptCache) {
     const last = turns[turns.length - 1];
     let restored = false;
     if (last?.role === 'user' && sent.prompt.startsWith(last.content)) {
+      since.tokens += estimateTokens(sent.prompt) - estimateTokens(last.content);
       last.content = sent.prompt;
       restored = true;
     } else if (!last || last.role === 'assistant') {
       // 当时插了一句「（请继续）」之类的
+      since.tokens += estimateTokens(sent.prompt);
       turns.push({ role: 'user', content: sent.prompt });
       restored = true;
     }
     // 对不上（中间的消息被编辑或删除过）：这一轮的状态更新不在历史里了，下一次发完整状态
     chain = restored && sent.state && (sent.full || chain) ? sent.state : undefined;
+    if (restored && sent.full) Object.assign(since, { turns: 0, tokens: 0 });
+    else since.turns++;
     push('assistant', m.content === sent.content ? sent.reply : content);
   };
-  return { turns, push, own, baseline: () => chain };
+  /** 这次可以只发变化的部分吗：状态链没断，而且离上次完整状态不太远 */
+  const baseline = () => (chain && since.turns < STATE_REFRESH_TURNS && since.tokens < STATE_REFRESH_TOKENS ? chain : undefined);
+  return { turns, push, own, baseline };
 }
 
 /**
@@ -170,7 +184,7 @@ export const HUMANLIKE_PROMPT = '你是一个真实的人，正在和另一个�
  * 只有当对方不止一个人时，才在消息前加上说话人的名字，否则模型分不清谁在说话。
  * 名字从第二个人第一次开口时开始加，之前的消息不回头改（历史保持不变，提示缓存才能命中）。
  */
-export function buildHumanlikeMessages(room: Room, self: Participant, history: Message[], cache?: PromptCache, out?: BuildOut): ChatMessage[] {
+export function buildHumanlikeMessages(room: Room, self: Participant, history: Message[], cache?: PromptCache, out?: BuildOut, noTail = false): ChatMessage[] {
   const usable = usableHistory(history).filter((m) => m.role !== 'system');
   const isSelf = (m: Message) => m.role === 'ai' && m.participantId === self.id;
   // 第二个人开口以后，从那条消息起都带名字；之前的消息保持原样（不回头补名字，历史不变，提示缓存才能命中）
@@ -185,6 +199,7 @@ export function buildHumanlikeMessages(room: Room, self: Participant, history: M
     seen.add(m.role === 'human' ? '#human' : (m.participantId ?? m.speakerName));
     push('user', seen.size > 1 ? `${m.role === 'human' ? room.settings.humanName : m.speakerName}：${text}` : text);
   }
+  if (noTail) return [{ role: 'system', content: '' }, ...turns];
   if (turns.length === 0 || turns[0].role === 'assistant') turns.unshift({ role: 'user', content: '（对话开始）' });
   if (turns[turns.length - 1].role === 'assistant') turns.push({ role: 'user', content: '（继续）' });
   if (out) out.prompt = turns[turns.length - 1].content;
@@ -193,8 +208,8 @@ export function buildHumanlikeMessages(room: Room, self: Participant, history: M
 }
 
 /** 为某个 AI 构建完整的请求消息 */
-export function buildAgentMessages(room: Room, self: Participant, history: Message[], cache?: PromptCache, out?: BuildOut): ChatMessage[] {
-  if (room.settings.promptMode === 'humanlike') return buildHumanlikeMessages(room, self, history, cache, out);
+export function buildAgentMessages(room: Room, self: Participant, history: Message[], cache?: PromptCache, out?: BuildOut, noTail = false): ChatMessage[] {
+  if (room.settings.promptMode === 'humanlike') return buildHumanlikeMessages(room, self, history, cache, out, noTail);
   const { turns, push, own } = turnBuilder(cache);
 
   for (const m of usableHistory(history)) {
@@ -202,6 +217,8 @@ export function buildAgentMessages(room: Room, self: Participant, history: Messa
     else push('user', `${speakerTag(room, m)}：${bodyOf(m)}`);
   }
 
+  // 只要这段记录本身（整理前情提要用）
+  if (noTail) return [{ role: 'system', content: '' }, ...turns];
   if (turns.length === 0) {
     turns.push({ role: 'user', content: '（对话刚刚开始，请你先开口。）' });
   } else {

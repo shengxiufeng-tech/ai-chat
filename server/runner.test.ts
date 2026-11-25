@@ -355,7 +355,8 @@ test('提示缓存（跑团）：守秘人和 AI 队友每次请求都是上一�
     assert.match(lastOf(kp[0]), /【当前状态】（程序自动更新，数值以这里为准）/);
     assert.ok(kp.slice(1).every((r) => !lastOf(r).includes('【当前状态】（程序自动更新')), '之后不再附完整状态');
     assert.ok(kp.slice(1).some((r) => /【当前状态更新】[\s\S]*守秘人笔记[\s\S]*雾中的歌声/.test(lastOf(r))), '笔记变了就重新发笔记');
-    assert.ok(kp.slice(1).some((r) => lastOf(r).includes('【当前状态】和上一轮一样')), '没变化时只说一句');
+    assert.ok(kp.slice(1).some((r) => lastOf(r).includes('（角色卡、笔记和备忘和上一轮一样，没有变化）')), '没变化时只说一句');
+    assert.ok(kp.every((r) => /【关键数值】（以这里为准）「凤笙休」HP \d+\/\d+/.test(lastOf(r))), '每一轮都附关键数值');
 
     // 改了一条已经发过的消息：那一轮对不上，状态链断了，下一次重新附完整状态
     room.messages.find((m) => m.role === 'human')!.content += '（改过）';
@@ -411,5 +412,65 @@ test('提示缓存（多人对话、拟人模式）：每个 AI 的每次请求�
       store.flushAll();
       fs.rmSync(dir, { recursive: true, force: true });
     }
+  }
+});
+
+test('阶梯式裁剪 + 前情提要：涨满才裁、写一次提要；两次裁剪之间每次请求都是上一次 + 回复，提要不变', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-chat-cut-'));
+  const store = new Store(dir);
+  store.saveSettings({ baseUrl: 'mock', defaultModel: 'mock/fast' });
+  store.addRoom({
+    id: 'c2',
+    mode: 'chat',
+    title: 't',
+    scenario: '聊聊天',
+    participants: [{ id: 'a', name: '阿青', avatar: '🤖', color: '#fff', model: 'mock/tiny', reasoningEffort: '', bio: '', persona: '', temperature: 1, enabled: true }],
+    messages: [],
+    settings: { ...DEFAULT_ROOM_SETTINGS, turnMode: 'manual' },
+    createdAt: 0,
+    updatedAt: 0,
+  });
+  const runner = new RunnerManager(store).get('c2');
+  const r = store.getRoom('c2')!;
+  const reqs: { role: string; content: unknown }[][] = [];
+  onModelRequest((roomId, _pid, messages) => roomId === 'c2' && reqs.push(structuredClone(messages)));
+  const notices: string[] = [];
+  runner.subscribe((ev) => ev.type === 'notice' && notices.push(ev.text));
+  try {
+    for (let i = 0; i < 14; i++) {
+      runner.addHumanMessage(`第 ${i + 1} 段：${'今天天气不错，我们聊聊最近读的书和看过的电影吧。'.repeat(5)}`);
+      const n = r.messages.filter((m) => m.role === 'ai' && m.status === 'done').length;
+      runner.requestTurn('a');
+      await until(() => r.messages.filter((m) => m.role === 'ai' && m.status === 'done').length > n && !runner.state().generating);
+    }
+    const first = (q: { role: string; content: unknown }[]) => String(q.find((m) => m.role !== 'system')!.content);
+    const preface = (q: { role: string; content: unknown }[]) => first(q).match(/^（为了控制上下文长度[\s\S]*?(?:【前情提要结束】|已省略。）)/)?.[0] ?? '';
+    const cuts = new Set(reqs.map(preface));
+    assert.ok(cuts.size >= 2, '裁剪过');
+    // 这个模拟模型的上下文只有 6k，每轮涨约 250 token，挪一次能撑两三轮；真实的 256k 模型一次能撑几十轮
+    assert.ok(cuts.size - 1 <= 8, `14 轮里裁剪了 ${cuts.size - 1} 次，不是每轮都裁`);
+    assert.ok(reqs.some((q) => /【前情提要】\n（模拟前情提要）/.test(first(q))), '裁掉的部分写成了前情提要');
+    assert.match(r.contextCuts?.a?.summary ?? '', /模拟前情提要/);
+    assert.ok(notices.some((t) => t.includes('整理成前情提要')));
+    // 后面的提要接着前面的写
+    assert.ok(reqs.some((q) => /接着更早的提要/.test(first(q))), '第二次裁剪时把之前的提要一起整理');
+    // 两次裁剪之间：每次请求都是上一次 + 回复，原样不动
+    let pairs = 0;
+    for (let k = 1; k < reqs.length; k++) {
+      if (preface(reqs[k]) !== preface(reqs[k - 1])) continue;
+      assertAppendOnly(`第 ${k + 1} 次`, [reqs[k - 1], reqs[k]]);
+      pairs++;
+    }
+    assert.ok(pairs >= 5, `${pairs} 对相邻请求在同一个裁剪点`);
+    // 裁剪点存在房间里：重启后（新的 runner）接着用
+    store.flushAll();
+    const reloaded = new Store(dir).getRoom('c2')!;
+    assert.deepEqual(reloaded.contextCuts, r.contextCuts);
+  } finally {
+    onModelRequest(undefined);
+    runner.dispose();
+    await sleep(100);
+    store.flushAll();
+    fs.rmSync(dir, { recursive: true, force: true });
   }
 });

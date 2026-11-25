@@ -29,6 +29,47 @@ export function inputBudget(contextWindow: number) {
 
 export const omissionNote = (n: number) => `（为了控制上下文长度，更早的 ${n} 条消息已省略。）`;
 
+/** 裁剪点挪动时，一次裁到上限的这个比例：之后要涨很久才会再裁，中间每一轮的前缀都不变，提示缓存能命中 */
+export const TRIM_LOW_WATER = 0.7;
+
+/**
+ * 阶梯式裁剪：从 start（上次的裁剪点，丢掉了前面几条）开始构建，放得下就不动；
+ * 放不下才往后挪，一次挪到上限的 70% 以下。build 的第二个参数是丢掉的条数（用来写「已省略」）。
+ */
+export function stepFit<M extends WireMessage>(
+  build: (history: Message[], dropped: number) => M[],
+  history: Message[],
+  contextWindow: number,
+  start: number,
+): { messages: M[]; dropped: number; tokens: number; moved: boolean } {
+  const budget = inputBudget(contextWindow);
+  let dropped = Math.min(Math.max(0, start), Math.max(0, history.length - 1));
+  let messages = build(history.slice(dropped), dropped);
+  let tokens = chatTokens(messages);
+  if (tokens <= budget) return { messages, dropped, tokens, moved: false };
+  const target = Math.floor(budget * TRIM_LOW_WATER);
+  for (let attempt = 0; attempt < 6 && tokens > target && dropped < history.length - 1; attempt++) {
+    let excess = tokens - target;
+    while (excess > 0 && dropped < history.length - 1) {
+      excess -= estimateTokens(history[dropped].content) + PER_MESSAGE;
+      dropped++;
+    }
+    messages = build(history.slice(dropped), dropped);
+    tokens = chatTokens(messages);
+  }
+  return { messages, dropped, tokens, moved: true };
+}
+
+/** 在系统提示之后的第一条消息开头加上一段（「已省略」或者前情提要） */
+export function prependToFirst<M extends WireMessage>(messages: M[], text: string): M[] {
+  const first = messages.findIndex((m) => m.role !== 'system');
+  if (first < 0 || !text) return messages;
+  const out = messages.slice();
+  const m = out[first];
+  out[first] = (typeof m.content === 'string' ? { ...m, content: `${text}\n\n${m.content}` } : { ...m, content: [{ type: 'text', text }, ...m.content] }) as M;
+  return out;
+}
+
 /**
  * 让请求放进模型的上下文窗口：先完整构建，超了就从最早的消息开始丢，再重新构建。
  * 系统提示和最近的消息总是保留；返回丢掉了多少条。

@@ -4,7 +4,7 @@ import { kpDisplayText, parseCheckModifier, quickInvestigator, rollText, splitIn
 import type { Message, Participant, Room } from '../shared/types.ts';
 import { DEFAULT_ROOM_SETTINGS } from '../shared/types.ts';
 import { parseModel } from './llm.ts';
-import { buildHumanlikeMessages, HUMANLIKE_PROMPT } from './prompt.ts';
+import { buildHumanlikeMessages, HUMANLIKE_PROMPT, type BuildOut, type SentTurn } from './prompt.ts';
 import { stripCommands } from '../shared/coc.ts';
 import { improvScenario } from './scenarios.ts';
 import {
@@ -567,4 +567,54 @@ test('[展示]：只展示可以给玩家看的图片，队友能看到展示过
   const kp = buildKpMessages(room, room.participants[0], room.messages);
   assert.match(kp.at(-1)!.content, /【展示】守秘人展示了手出物「日记残页」/);
   assert.doesNotMatch(kp.at(-1)!.content, /它在墙里/, '守秘人那边不重复内容（系统提示里已经有）');
+});
+
+test('状态：HP 变了只更新【关键数值】，不重发角色卡；隔 15 轮再附一次完整状态；状态链断了也附完整的', () => {
+  const room = trpgRoom();
+  const kp = room.participants.find((p) => p.role === 'kp')!;
+  const sent = new Map<string, SentTurn>();
+  const cache = { sentFor: (m: Message) => sent.get(m.id) };
+  const history: Message[] = [];
+  const turn = (i: number) => {
+    history.push(msg({ role: 'human', speakerName: '小明', content: `我做第 ${i} 件事` }));
+    const out: BuildOut = {};
+    const msgs = buildKpMessages(room, kp, history, cache, out);
+    assert.equal(out.prompt, msgs.at(-1)!.content, '记下的就是实际发出去的最后一条');
+    const m = msg({ role: 'ai', participantId: kp.id, speakerName: kp.name, content: `（守秘人第 ${i} 段）` });
+    history.push(m);
+    sent.set(m.id, { prompt: out.prompt!, reply: m.content, content: m.content, state: out.state, full: out.full });
+    return out;
+  };
+  const first = turn(0);
+  assert.equal(first.full, true);
+  assert.match(first.prompt!, /【当前状态】（程序自动更新/);
+  assert.match(first.prompt!, /玩家的调查员：/);
+  assert.match(first.prompt!, /【关键数值】（以这里为准）「张三」HP/);
+
+  // 只是掉血：关键数值更新，角色卡不用重发
+  const sheet = room.trpg!.sheets.player!;
+  sheet.hp.current -= 2;
+  const second = turn(1);
+  assert.equal(second.full, false);
+  assert.match(second.prompt!, /（角色卡、笔记和备忘和上一轮一样，没有变化）/);
+  assert.match(second.prompt!, new RegExp(`「张三」HP ${sheet.hp.current}/${sheet.hp.max}`));
+  assert.doesNotMatch(second.prompt!, /玩家的调查员：/);
+
+  // 物品变了：只重发那张角色卡
+  sheet.items.push('旧钥匙');
+  const third = turn(2);
+  assert.match(third.prompt!, /【当前状态更新】[\s\S]*玩家的调查员：[\s\S]*旧钥匙/);
+  assert.doesNotMatch(third.prompt!, /AI 队友：/);
+
+  // 一直没变化：离上次完整状态 15 轮以后再附一次完整的，之后又只发变化
+  const fulls: number[] = [];
+  for (let i = 3; i < 25; i++) if (turn(i).full) fulls.push(i);
+  assert.deepEqual(fulls, [16], `第 ${fulls.join('、')} 轮附了完整状态`);
+
+  // 改了守秘人自己说过的话：前面那条消息还对得上，状态链不断（模型会看到改后的内容）
+  history[history.length - 1].content += '（改过）';
+  assert.equal(turn(25).full, false);
+  // 改了玩家说过的话：生成那一轮时的最后一条消息对不上了，状态链断了，附完整的
+  history[history.length - 2].content += '（改过）';
+  assert.equal(turn(26).full, true);
 });

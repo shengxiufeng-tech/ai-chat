@@ -724,6 +724,14 @@ async function* mockReply(opts: ChatOptions): AsyncGenerator<ChatChunk> {
     return;
   }
 
+  // 模拟整理前情提要
+  if (system.includes('整理前情提要')) {
+    await sleep(30, opts.signal);
+    const prev = /【更早的前情提要】/.test(last) ? '（接着更早的提要）' : '';
+    yield { content: `（模拟前情提要）${prev}之前的 ${[...last.matchAll(/\n\n/g)].length + 1} 段对话里，大家聊了很多。` };
+    return;
+  }
+
   // 模拟狼人杀：法官主持人和 AI 玩家
   if (system.includes('狼人杀的法官主持人')) {
     await sleep(60, opts.signal);

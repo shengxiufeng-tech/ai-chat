@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { Message } from '../shared/types.ts';
-import { chatTokens, estimateTokens, fitToContext, inputBudget } from './context.ts';
+import { chatTokens, estimateTokens, fitToContext, inputBudget, prependToFirst, stepFit, TRIM_LOW_WATER } from './context.ts';
 import type { ChatMessage } from './llm.ts';
 
 test('估算 token：中文按字、英文按 3.5 个字符', () => {
@@ -55,4 +55,43 @@ test('就算最后一条本身超长也不会把它丢掉', () => {
   assert.equal(r.dropped, 2);
   assert.equal(r.messages.length, 2);
   assert.match(r.messages.at(-1)!.content, /已省略。）\n\n2号/);
+});
+
+test('阶梯式裁剪：涨满了才裁，一次裁到上限的 70%；之后裁剪点不动，直到再次涨满', () => {
+  const window = 20_000;
+  const budget = inputBudget(window);
+  const all = msgs(200, 300);
+  let start = 0;
+  let moves = 0;
+  let lastDropped = -1;
+  const firsts = new Set<number>();
+  for (let n = 1; n <= all.length; n++) {
+    const r = stepFit((h) => build(h), all.slice(0, n), window, start);
+    assert.ok(r.tokens <= budget, `第 ${n} 轮放得下`);
+    if (r.moved) {
+      moves++;
+      assert.ok(r.tokens <= budget * TRIM_LOW_WATER + 400, `挪动后降到上限的 70% 左右（${r.tokens} / ${budget}）`);
+      assert.ok(r.dropped > lastDropped, '裁剪点只往后挪');
+    } else {
+      assert.equal(r.dropped, start, '没涨满就不动');
+    }
+    lastDropped = r.dropped;
+    start = r.dropped;
+    firsts.add(r.dropped);
+  }
+  // 每条约 300 token：上限 1.5 万左右，每次挪动后要再涨约 30% 才会再挪
+  assert.ok(moves > 3 && moves < 30, `200 轮里挪了 ${moves} 次`);
+  assert.equal(firsts.size, moves + 1);
+});
+
+test('在第一条非系统消息开头加说明（文字或带图片的消息都行）', () => {
+  const out = prependToFirst(
+    [
+      { role: 'system', content: 's' },
+      { role: 'user', content: [{ type: 'image_url', image_url: { url: 'data:x' } }, { type: 'text', text: '地图' }] },
+    ],
+    '【前情提要】',
+  );
+  assert.deepEqual(out[1].content, [{ type: 'text', text: '【前情提要】' }, { type: 'image_url', image_url: { url: 'data:x' } }, { type: 'text', text: '地图' }]);
+  assert.equal(prependToFirst([{ role: 'system', content: 's' }, { role: 'user', content: '你好' }], '说明')[1].content, '说明\n\n你好');
 });

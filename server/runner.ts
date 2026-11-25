@@ -4,7 +4,7 @@ import { resolveGrowth, type InvestigatorSheet } from '../shared/coc.ts';
 import { otherSpeakerNames, stripImpersonation } from '../shared/text.ts';
 import fs from 'node:fs';
 import { ASSET_KIND_LABELS, type Message, type Participant, type Room, type RoomEvent, type RunnerState, type RunStatus } from '../shared/types.ts';
-import { DEFAULT_CONTEXT_WINDOW, fitToContext } from './context.ts';
+import { chatTokens, DEFAULT_CONTEXT_WINDOW, estimateTokens, inputBudget, omissionNote, prependToFirst, stepFit } from './context.ts';
 import { completeChat, contextWindowOf, streamChat, streamMeter, type ChatPart, type WireMessage } from './llm.ts';
 import { activePlanner, appendToLast, applyPlanCommands, plannerInstruction, writerBlock } from './planner.ts';
 import {
@@ -46,6 +46,10 @@ type Listener = (ev: RoomEvent) => void;
 /** 发给 Magpie 的会话 id：每个房间里的每个 AI 各一个，固定不变 */
 export const sessionIdFor = (roomId: string, who: string) => `ai-chat-${roomId}-${who}`;
 
+/** 裁剪后历史开头的说明：有前情提要就附上 */
+const preface = (dropped: number, summary?: string) =>
+  summary ? `（为了控制上下文长度，更早的 ${dropped} 条消息已省略，下面是那部分对话的前情提要。）\n【前情提要】\n${summary}\n【前情提要结束】` : omissionNote(dropped);
+
 /** 队列里的一次发言请求：指定参与者，或交给规则自动选 */
 type TurnRequest = { participantId: string } | 'auto';
 
@@ -66,7 +70,6 @@ export class RoomRunner {
   /** 跑团：守秘人因为自动掷骰连续接着说的次数 */
   private kpChain = 0;
   /** 已经提示过「上下文被裁剪」的 参与者:模型 */
-  private trimNotified = new Set<string>();
   /** 狼人杀：对局控制和正在发言的玩家 */
   private wwGame?: WerewolfGame;
   /** 提示缓存：每条 AI 消息生成时最后那条消息的原文和模型的原话（只存在内存里，重启后第一轮重新拼） */
@@ -541,6 +544,8 @@ export class RoomRunner {
   clearMessages() {
     this.stop();
     this.room.messages = [];
+    delete this.room.contextCuts;
+    this.sentTurns.clear();
     this.aiTurnsSinceHuman = 0;
     if (this.room.trpg) {
       this.room.trpg.started = false;
@@ -713,31 +718,115 @@ export class RoomRunner {
     return out;
   }
 
-  private buildMessages(room: Room, p: Participant, history: Message[], cache?: PromptCache, out?: BuildOut): WireMessage[] {
+  private buildMessages(room: Room, p: Participant, history: Message[], cache?: PromptCache, out?: BuildOut, noTail = false): WireMessage[] {
     if (room.mode === 'trpg' && room.trpg) {
-      if (p.role === 'kp') return this.withMaps(room, buildKpMessages(room, p, history, cache, out));
-      if (p.role === 'player') return buildTeammateMessages(room, p, history, cache, out);
+      if (p.role === 'kp') {
+        const msgs = buildKpMessages(room, p, history, cache, out, noTail);
+        return noTail ? msgs : this.withMaps(room, msgs);
+      }
+      if (p.role === 'player') return buildTeammateMessages(room, p, history, cache, out, noTail);
     }
-    return buildAgentMessages(room, p, history, cache, out);
+    return buildAgentMessages(room, p, history, cache, out, noTail);
   }
 
-  /** 按模型的上下文窗口裁掉最早的对话；第一次裁剪时提示一下 */
-  private async fitFor(p: Participant, model: string, build: (h: Message[]) => WireMessage[], history: Message[]) {
+  /**
+   * 让请求放进模型的上下文：阶梯式裁剪。
+   * 裁剪点存在房间里，放得下就不动（前缀不变，提示缓存能命中）；涨满了才一次裁到上限的 70%，
+   * 并把新裁掉的部分（连同之前的提要）整理成前情提要，放在历史开头，到下次裁剪前都不变。
+   */
+  private async fitFor(
+    p: Participant,
+    model: string,
+    build: (h: Message[]) => WireMessage[],
+    history: Message[],
+    opts: { key: string; signal: AbortSignal; effort?: string },
+  ) {
     const room = this.room;
     const settings = this.store.getSettings();
     const window = (await contextWindowOf(settings.baseUrl, settings.apiKey, model)) ?? DEFAULT_CONTEXT_WINDOW;
-    const fit = fitToContext(build, history, window);
-    if (fit.dropped > 0) {
-      const key = `${p.id}:${model}`;
-      if (!this.trimNotified.has(key)) {
-        this.trimNotified.add(key);
-        const notebook = room.mode === 'trpg' && room.trpg?.notebook;
-        this.notice(
-          `对话已经接近「${p.name}」所用模型（${model}）的上下文上限（约 ${Math.round(window / 1000)}k），更早的消息不再发给它${notebook ? '，重要的 NPC 和线索仍然记在守秘人笔记里' : ''}。`,
-        );
-      }
+    const cut = room.contextCuts?.[opts.key];
+    const found = cut ? history.findIndex((m) => m.id === cut.from) : -1;
+    const start = Math.max(0, found);
+    const prev = found >= 0 ? cut?.summary : undefined;
+    const decorate = (msgs: WireMessage[], dropped: number, summary?: string) => (dropped > 0 ? prependToFirst(msgs, preface(dropped, summary)) : msgs);
+    // 搜裁剪点时先拿现有的提要估算长度，新提要写好后再正式拼一次
+    const fit = stepFit((h, d) => decorate(build(h), d, prev), history, window, start);
+    if (!fit.moved) return fit;
+
+    this.notice(
+      `对话涨满了「${p.name}」所用模型（${model}）的上下文（约 ${Math.round(window / 1000)}k），正在把更早的 ${fit.dropped} 条消息整理成前情提要，之后要再涨满才会重新整理。`,
+    );
+    let summary: string | undefined;
+    try {
+      summary = await this.summarize(p, model, history.slice(found >= 0 ? start : 0, fit.dropped), prev, window, opts);
+    } catch (err) {
+      if (opts.signal.aborted) throw err;
+      this.notice(`整理前情提要失败（${err instanceof Error ? err.message : String(err)}），这一轮先只省略更早的消息。`, 'error');
     }
-    return fit;
+    room.contextCuts = { ...room.contextCuts, [opts.key]: { from: history[fit.dropped].id, summary: summary ?? prev, at: Date.now() } };
+    this.store.touchRoom(room.id, { immediate: true });
+    const messages = decorate(build(history.slice(fit.dropped)), fit.dropped, summary ?? prev);
+    return { messages, dropped: fit.dropped, tokens: chatTokens(messages), moved: true };
+  }
+
+  /** 把一段较早的对话整理成前情提要：从这个 AI 的视角（看不到的不会写进去），用它自己的模型；太长就分几段接着整理 */
+  private async summarize(p: Participant, model: string, segment: Message[], prev: string | undefined, window: number, opts: { signal: AbortSignal; effort?: string }) {
+    const room = this.room;
+    const settings = this.store.getSettings();
+    const trpg = room.mode === 'trpg';
+    const kp = trpg && p.role === 'kp';
+    const self = trpg && p.role === 'player' ? (room.trpg?.sheets[p.id]?.name ?? p.name) : p.name;
+    const text = (c: WireMessage['content']) => (typeof c === 'string' ? c : c.map((x) => (x.type === 'text' ? x.text : '')).join(''));
+    const lines = this.buildMessages(room, p, segment, undefined, undefined, true)
+      .filter((m) => m.role !== 'system')
+      .map((m) => (m.role === 'assistant' ? `【${self}（就是这份提要的读者）】：${text(m.content)}` : text(m.content)));
+    const who = trpg ? (kp ? '这场《克苏鲁的呼唤》跑团的守秘人' : `这场《克苏鲁的呼唤》跑团里的 AI 调查员「${self}」`) : `这场多人对话里的「${p.name}」`;
+    const system = [
+      `你在帮${who}整理前情提要。对话太长了，下面这段较早的记录之后不会再发给 TA。请整理成一份前情提要，让 TA 只看提要也能接着${kp ? '主持' : '参与'}下去。`,
+      '要求：',
+      `- 按时间顺序写清楚发生了什么${trpg ? '：去过哪些地方、遇到了谁、NPC 的身份和态度、发现的线索' : '：聊了哪些话题、各人的观点和立场'}、做出的决定和约定、还没解决的问题。`,
+      '- 人名、地名、物品名照原文写，不要编造记录里没有的内容；分清楚是谁说的、谁做的。',
+      trpg ? '- 调查员的 HP、SAN 等数值不用抄，之后每轮都会附上最新的。' : '',
+      kp ? '- 可以写守秘人自己的推进思路和埋下的伏笔（这份提要只有守秘人看得到）。' : '',
+      '- 写成连贯的几段话或简短的条目，控制在 1500 字以内，只输出提要本身。',
+    ]
+      .filter(Boolean)
+      .join('\n');
+    // 太长的话分几段，一段一段接着整理（每段都带上之前整理好的提要）
+    const chunkBudget = Math.max(2_000, inputBudget(window) - 8_000);
+    const chunks: string[][] = [[]];
+    let used = 0;
+    for (const line of lines) {
+      const t = estimateTokens(line);
+      if (used + t > chunkBudget && chunks[chunks.length - 1].length) {
+        chunks.push([]);
+        used = 0;
+      }
+      chunks[chunks.length - 1].push(line);
+      used += t;
+    }
+    let summary = prev;
+    for (const chunk of chunks) {
+      if (!chunk.length) continue;
+      const user = `${summary ? `【更早的前情提要】\n${summary}\n\n【之后的对话记录】` : '【对话记录】'}\n${chunk.join('\n\n')}\n\n请${summary ? '把更早的前情提要和之后的对话记录合并成一份新的' : '整理成一份'}前情提要。`;
+      const out = await completeChat({
+        baseUrl: settings.baseUrl,
+        apiKey: settings.apiKey,
+        model,
+        reasoningEffort: opts.effort || undefined,
+        temperature: 0.3,
+        sessionId: sessionIdFor(room.id, `${p.id}-summary`),
+        signal: opts.signal,
+        messages: [
+          { role: 'system', content: system },
+          { role: 'user', content: user },
+        ],
+      });
+      const clean = out.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+      if (!clean) throw new Error('模型返回了空内容');
+      summary = clean;
+    }
+    return summary;
   }
 
   /** 构思阶段：让构思模型先想清楚这一轮说什么，构思内容实时显示在消息的「构思」里 */
@@ -747,7 +836,11 @@ export class RoomRunner {
     const planner = activePlanner(p)!;
     const kp = room.mode === 'trpg' && p.role === 'kp';
     const instruction = plannerInstruction({ kp, name: room.settings.promptMode === 'humanlike' ? undefined : p.name });
-    const fit = await this.fitFor(p, planner.model, (h) => appendToLast(this.buildMessages(room, p, h), instruction), history);
+    const fit = await this.fitFor(p, planner.model, (h) => appendToLast(this.buildMessages(room, p, h), instruction), history, {
+      key: `${p.id}:plan`,
+      signal,
+      effort: planner.reasoningEffort,
+    });
     if (fit.dropped > 0) message.trimmed = Math.max(message.trimmed ?? 0, fit.dropped);
     const stream = streamChat({
       baseUrl: settings.baseUrl,
@@ -835,7 +928,11 @@ export class RoomRunner {
       const extra = plan ? writerBlock(plan, { kp }) : '';
       // 提示缓存：拼历史时把之前每一轮最后那条消息的原文和模型的原话放回去（构思 / 执笔的不做：构思会一直留在历史里，太占上下文）
       const cache = planner ? undefined : this.promptCache;
-      const fit = await this.fitFor(p, model, (h) => appendToLast(this.buildMessages(room, p, h, cache, out), extra), history);
+      const fit = await this.fitFor(p, model, (h) => appendToLast(this.buildMessages(room, p, h, cache, out), extra), history, {
+        key: p.id,
+        signal: controller.signal,
+        effort: p.reasoningEffort,
+      });
       if (fit.dropped > 0) message.trimmed = Math.max(message.trimmed ?? 0, fit.dropped);
       requestHook?.(room.id, p.id, fit.messages);
       const stream = streamChat({
