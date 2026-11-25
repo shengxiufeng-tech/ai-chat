@@ -78,15 +78,88 @@ export function usableHistory(messages: Message[]) {
   );
 }
 
+/**
+ * 提示缓存：一个 AI 生成某条消息时，最后一条消息的原文、模型的原话和当时附上的状态。
+ * 拼历史时把它们原样放回去，这一轮的请求就是「上一轮的请求 + 模型的回复 + 新内容」。
+ * Magpie 发现历史和上一轮对不上时会新开会话、重放上下文，缓存就全部失效。
+ */
+export interface SentTurn {
+  /** 当时最后一条 user 消息的全文（那段历史 + 附在末尾的状态和提醒） */
+  prompt: string;
+  /** 模型的原话（还没去掉名字前缀、替别人说的话等） */
+  reply: string;
+  /** 处理完存进消息的正文；之后被编辑过就改用编辑后的内容 */
+  content: string;
+  /** 当时附上的状态（每一部分的全文），以及附的是完整状态还是只有变化的部分 */
+  state?: Record<string, string>;
+  full?: boolean;
+}
+
+export interface PromptCache {
+  sentFor(m: Message): SentTurn | undefined;
+}
+
+/** 构建请求时顺便记下：最后一条消息的原文、这次附上的状态 */
+export interface BuildOut {
+  prompt?: string;
+  state?: Record<string, string>;
+  full?: boolean;
+}
+
 /** 很多接口要求 user / assistant 交替出现，同一方连续的消息合并成一条 */
-export function turnBuilder() {
+export function turnBuilder(cache?: PromptCache) {
   const turns: ChatMessage[] = [];
   const push = (role: 'user' | 'assistant', content: string) => {
     const last = turns[turns.length - 1];
     if (last && last.role === role) last.content += `\n\n${content}`;
     else turns.push({ role, content });
   };
-  return { turns, push };
+  // 状态链：从最近一次完整状态开始，之后每一轮的状态更新都原样留在历史里，才能只发变化的部分
+  let chain: Record<string, string> | undefined;
+  /** 自己说过的话：把生成它时最后那条消息的原文和模型的原话放回去 */
+  const own = (m: Message, content: string) => {
+    const sent = cache?.sentFor(m);
+    if (!sent) {
+      chain = undefined;
+      push('assistant', content);
+      return;
+    }
+    const last = turns[turns.length - 1];
+    let restored = false;
+    if (last?.role === 'user' && sent.prompt.startsWith(last.content)) {
+      last.content = sent.prompt;
+      restored = true;
+    } else if (!last || last.role === 'assistant') {
+      // 当时插了一句「（请继续）」之类的
+      turns.push({ role: 'user', content: sent.prompt });
+      restored = true;
+    }
+    // 对不上（中间的消息被编辑或删除过）：这一轮的状态更新不在历史里了，下一次发完整状态
+    chain = restored && sent.state && (sent.full || chain) ? sent.state : undefined;
+    push('assistant', m.content === sent.content ? sent.reply : content);
+  };
+  return { turns, push, own, baseline: () => chain };
+}
+
+/**
+ * 附在最后的状态：第一次（或者历史里的状态链断了）发完整的，之后只发有变化的部分。
+ * sections 是 [key, 带标题的全文]；返回要附上的文字和这次的状态。
+ */
+export function stateTail(
+  sections: [string, string][],
+  baseline: Record<string, string> | undefined,
+  labels: { full: string; diff: string; same: string },
+  sep = '\n',
+) {
+  const state = Object.fromEntries(sections);
+  const join = (parts: string[]) => parts.filter(Boolean).join(sep);
+  if (!sections.length) return { text: '', state, full: true };
+  if (!baseline) return { text: join([labels.full, ...sections.map(([, t]) => t)]), state, full: true };
+  const changed = sections.filter(([k, t]) => baseline[k] !== t).map(([, t]) => t);
+  const removed = Object.keys(baseline).filter((k) => !(k in state));
+  if (!changed.length && !removed.length) return { text: labels.same, state, full: false };
+  const gone = removed.map((k) => `${baseline[k].split('\n')[0].replace(/[：:]$/, '')}：已经没有了`);
+  return { text: join([labels.diff, ...changed, ...gone]), state, full: false };
 }
 
 /** 拟人模式唯一的提示词 */
@@ -95,31 +168,37 @@ export const HUMANLIKE_PROMPT = '你是一个真实的人，正在和另一个�
 /**
  * 拟人模式：只告诉模型它是真人、在和真人聊天，不加任何多人对话规则、名字标签或提醒。
  * 只有当对方不止一个人时，才在消息前加上说话人的名字，否则模型分不清谁在说话。
+ * 名字从第二个人第一次开口时开始加，之前的消息不回头改（历史保持不变，提示缓存才能命中）。
  */
-export function buildHumanlikeMessages(room: Room, self: Participant, history: Message[]): ChatMessage[] {
+export function buildHumanlikeMessages(room: Room, self: Participant, history: Message[], cache?: PromptCache, out?: BuildOut): ChatMessage[] {
   const usable = usableHistory(history).filter((m) => m.role !== 'system');
   const isSelf = (m: Message) => m.role === 'ai' && m.participantId === self.id;
-  const others = new Set(usable.filter((m) => !isSelf(m)).map((m) => (m.role === 'human' ? '#human' : m.participantId)));
-  const withNames = others.size > 1;
-  const { turns, push } = turnBuilder();
+  // 第二个人开口以后，从那条消息起都带名字；之前的消息保持原样（不回头补名字，历史不变，提示缓存才能命中）
+  const seen = new Set<string>();
+  const { turns, push, own } = turnBuilder(cache);
   for (const m of usable) {
     const text = m.status === 'interrupted' ? `${m.content.trim()}……` : m.content.trim();
-    if (isSelf(m)) push('assistant', text);
-    else push('user', withNames ? `${m.role === 'human' ? room.settings.humanName : m.speakerName}：${text}` : text);
+    if (isSelf(m)) {
+      own(m, text);
+      continue;
+    }
+    seen.add(m.role === 'human' ? '#human' : (m.participantId ?? m.speakerName));
+    push('user', seen.size > 1 ? `${m.role === 'human' ? room.settings.humanName : m.speakerName}：${text}` : text);
   }
   if (turns.length === 0 || turns[0].role === 'assistant') turns.unshift({ role: 'user', content: '（对话开始）' });
   if (turns[turns.length - 1].role === 'assistant') turns.push({ role: 'user', content: '（继续）' });
+  if (out) out.prompt = turns[turns.length - 1].content;
   const system = self.persona.trim() ? `${HUMANLIKE_PROMPT}\n\n${self.persona.trim()}` : HUMANLIKE_PROMPT;
   return [{ role: 'system', content: system }, ...turns];
 }
 
 /** 为某个 AI 构建完整的请求消息 */
-export function buildAgentMessages(room: Room, self: Participant, history: Message[]): ChatMessage[] {
-  if (room.settings.promptMode === 'humanlike') return buildHumanlikeMessages(room, self, history);
-  const { turns, push } = turnBuilder();
+export function buildAgentMessages(room: Room, self: Participant, history: Message[], cache?: PromptCache, out?: BuildOut): ChatMessage[] {
+  if (room.settings.promptMode === 'humanlike') return buildHumanlikeMessages(room, self, history, cache, out);
+  const { turns, push, own } = turnBuilder(cache);
 
   for (const m of usableHistory(history)) {
-    if (m.role === 'ai' && m.participantId === self.id) push('assistant', bodyOf(m));
+    if (m.role === 'ai' && m.participantId === self.id) own(m, bodyOf(m));
     else push('user', `${speakerTag(room, m)}：${bodyOf(m)}`);
   }
 
@@ -133,6 +212,7 @@ export function buildAgentMessages(room: Room, self: Participant, history: Messa
   }
   // 结尾提醒一下现在是谁在说话，减少模型"串台"替别人发言
   turns[turns.length - 1].content += `\n\n（现在轮到你「${self.name}」发言）`;
+  if (out) out.prompt = turns[turns.length - 1].content;
 
   return [{ role: 'system', content: buildSystemPrompt(room, self) }, ...turns];
 }

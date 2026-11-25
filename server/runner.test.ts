@@ -8,7 +8,7 @@ import { test } from 'node:test';
 import { quickInvestigator } from '../shared/coc.ts';
 import type { Participant, Room } from '../shared/types.ts';
 import { DEFAULT_ROOM_SETTINGS } from '../shared/types.ts';
-import { RunnerManager } from './runner.ts';
+import { onModelRequest, RunnerManager } from './runner.ts';
 import { Store } from './store.ts';
 import { encodeJpeg } from './images.ts';
 
@@ -315,5 +315,101 @@ test('多人对话里的推理模型：记录思考用时、服务商报告的�
     await sleep(100);
     store.flushAll();
     fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+/** 相邻两次请求：后一次 = 前一次（最后那条消息也一字不差）+ 模型的回复 + 新内容 */
+function assertAppendOnly(label: string, reqs: { role: string; content: unknown }[][]) {
+  for (let k = 1; k < reqs.length; k++) {
+    const a = reqs[k - 1];
+    const b = reqs[k];
+    assert.ok(b.length >= a.length + 2, `${label}第 ${k + 1} 次请求比上一次长`);
+    assert.deepEqual(b.slice(0, a.length), a, `${label}第 ${k + 1} 次请求的前缀和上一次一字不差`);
+    assert.equal(b[a.length].role, 'assistant', `${label}紧接着是模型上一轮的回复`);
+  }
+}
+
+test('提示缓存（跑团）：守秘人和 AI 队友每次请求都是上一次请求 + 回复原样不动；状态只发变化的部分', async () => {
+  const { room, runner, cleanup } = setup();
+  const sent = new Map<string, { role: string; content: unknown }[][]>();
+  onModelRequest((roomId, pid, messages) => {
+    if (roomId === room.id) sent.set(pid, [...(sent.get(pid) ?? []), structuredClone(messages)]);
+  });
+  const lastOf = (r: { content: unknown }[]) => String(r.at(-1)!.content);
+  try {
+    for (let round = 0; round < 3; round++) {
+      const gyBefore = room.messages.filter((m) => m.participantId === 'gy' && m.status === 'done').length;
+      runner.addHumanMessage(`我沿着码头往前走（第 ${round + 1} 次）`);
+      await until(() => !!pendingRoll(room));
+      withRandom(0.1, () => runner.resolveRoll(pendingRoll(room)!.id));
+      await until(() => room.messages.filter((m) => m.participantId === 'gy' && m.status === 'done').length > gyBefore);
+      await until(() => !runner.state().generating);
+    }
+    const kp = sent.get('kp')!;
+    const gy = sent.get('gy')!;
+    assert.ok(kp.length >= 6 && gy.length >= 3, `守秘人 ${kp.length} 次、队友 ${gy.length} 次请求`);
+    assertAppendOnly('守秘人', kp);
+    assertAppendOnly('队友', gy);
+
+    // 状态：第一次完整，之后只发有变化的部分；记了线索以后笔记那一部分重新发
+    assert.match(lastOf(kp[0]), /【当前状态】（程序自动更新，数值以这里为准）/);
+    assert.ok(kp.slice(1).every((r) => !lastOf(r).includes('【当前状态】（程序自动更新')), '之后不再附完整状态');
+    assert.ok(kp.slice(1).some((r) => /【当前状态更新】[\s\S]*守秘人笔记[\s\S]*雾中的歌声/.test(lastOf(r))), '笔记变了就重新发笔记');
+    assert.ok(kp.slice(1).some((r) => lastOf(r).includes('【当前状态】和上一轮一样')), '没变化时只说一句');
+
+    // 改了一条已经发过的消息：那一轮对不上，状态链断了，下一次重新附完整状态
+    room.messages.find((m) => m.role === 'human')!.content += '（改过）';
+    const n = kp.length;
+    runner.addHumanMessage('我回头看看');
+    await until(() => (sent.get('kp')?.length ?? 0) > n);
+    const after = sent.get('kp')![n];
+    assert.match(lastOf(after), /【当前状态】（程序自动更新，数值以这里为准）/);
+    assert.ok(after.some((m) => String(m.content).includes('（改过）')), '编辑后的内容发给了模型');
+  } finally {
+    onModelRequest(undefined);
+    await cleanup();
+  }
+});
+
+test('提示缓存（多人对话、拟人模式）：每个 AI 的每次请求都是上一次请求 + 回复原样不动', async () => {
+  for (const promptMode of ['standard', 'humanlike'] as const) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ai-chat-prefix-'));
+    const store = new Store(dir);
+    store.saveSettings({ baseUrl: 'mock', defaultModel: 'mock/fast' });
+    const ai = (id: string, name: string): Participant => ({ id, name, avatar: '🤖', color: '#fff', model: 'mock/fast', reasoningEffort: '', bio: '', persona: '', temperature: 1, enabled: true });
+    store.addRoom({
+      id: 'p1',
+      mode: 'chat',
+      title: 't',
+      scenario: '聊聊天',
+      participants: [ai('a', '阿青'), ai('b', '白石')],
+      messages: [],
+      settings: { ...DEFAULT_ROOM_SETTINGS, turnMode: 'manual', promptMode },
+      createdAt: 0,
+      updatedAt: 0,
+    });
+    const runner = new RunnerManager(store).get('p1');
+    const r = store.getRoom('p1')!;
+    const sent = new Map<string, { role: string; content: unknown }[][]>();
+    onModelRequest((roomId, pid, messages) => {
+      if (roomId === 'p1') sent.set(pid, [...(sent.get(pid) ?? []), structuredClone(messages)]);
+    });
+    try {
+      const done = () => r.messages.filter((m) => m.status === 'done' && m.role === 'ai').length;
+      for (const [i, who] of ['a', 'a', 'b', 'a', 'b', 'b', 'a'].entries()) {
+        if (i === 3) runner.addHumanMessage('你们俩怎么看？');
+        const n = done();
+        runner.requestTurn(who);
+        await until(() => done() > n && !runner.state().generating);
+      }
+      assertAppendOnly(`${promptMode} 阿青`, sent.get('a')!);
+      assertAppendOnly(`${promptMode} 白石`, sent.get('b')!);
+    } finally {
+      onModelRequest(undefined);
+      runner.dispose();
+      await sleep(100);
+      store.flushAll();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   }
 });

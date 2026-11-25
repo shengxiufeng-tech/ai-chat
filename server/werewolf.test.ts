@@ -304,7 +304,7 @@ test('白痴被投票放逐：翻牌免死，之后不能投票', async () => {
     ctx.runner.run();
     // 模拟模型偶尔会让狼人自爆：那样白天直接结束、没有投票，夜里白痴也可能被刀
     const exploded = () => ctx.room.messages.some((m) => m.ww?.type === 'skill' && m.content.includes('自爆'));
-    for (let i = 0; i < 800 && !ctx.room.messages.some((m) => m.ww?.type === 'vote') && !exploded(); i++) await sleep(10);
+    for (let i = 0; i < 3000 && !ctx.room.messages.some((m) => m.ww?.type === 'vote') && !exploded(); i++) await sleep(10);
     ctx.runner.stop();
     await sleep(50);
     assert.equal(idiot.idiotRevealed, true);

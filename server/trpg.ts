@@ -27,7 +27,7 @@ import {
 } from '../shared/coc.ts';
 import { ASSET_KIND_LABELS, type Message, type Participant, type Room, type ScriptAsset } from '../shared/types.ts';
 import type { ChatMessage } from './llm.ts';
-import { turnBuilder, usableHistory } from './prompt.ts';
+import { stateTail, turnBuilder, usableHistory, type BuildOut, type PromptCache } from './prompt.ts';
 import { newId } from './store.ts';
 
 // ---------------- 角色识别 ----------------
@@ -104,21 +104,38 @@ export function notesText(notes: NoteEntry[]) {
  * 会变的状态（调查员数值、物品、笔记）。放在最后一条消息的末尾而不是系统提示里：
  * 这样系统提示和之前的历史在每一轮都保持不变，模型服务的提示缓存才能生效。
  */
-export function kpStateBlock(room: Room) {
+/** 守秘人的当前状态，分成几部分（之后只发有变化的部分） */
+function kpStateSections(room: Room): [string, string][] {
   const trpg = room.trpg!;
-  const lines = ['【当前状态】（程序自动更新，数值以这里为准）'];
+  const out: [string, string][] = [];
   const player = trpg.sheets.player;
-  if (player) lines.push(`玩家的调查员：\n${indent(sheetSummary(player, trpg.era))}`);
+  if (player) out.push(['player', `玩家的调查员：\n${indent(sheetSummary(player, trpg.era))}`]);
   for (const p of teammatesOf(room)) {
     const sheet = trpg.sheets[p.id];
-    if (sheet) lines.push(`AI 队友：\n${indent(sheetSummary(sheet, trpg.era))}`);
+    if (sheet) out.push([`mate:${p.id}`, `AI 队友：\n${indent(sheetSummary(sheet, trpg.era))}`]);
   }
-  if (trpg.notebook) lines.push(`守秘人笔记（玩家也能看到）：\n${indent(notesText(trpg.notes))}`);
+  if (trpg.notebook) out.push(['notes', `守秘人笔记（玩家也能看到）：\n${indent(notesText(trpg.notes))}`]);
   if (trpg.memo) {
     const memos = trpg.memos.length ? trpg.memos.map((m) => `- ${m.title}：${m.text}`).join('\n') : '（还是空的）';
-    lines.push(`秘密备忘（只有你能看到）：\n${indent(memos)}`);
+    out.push(['memos', `秘密备忘（只有你能看到）：\n${indent(memos)}`]);
   }
-  return lines.join('\n');
+  return out;
+}
+
+const TEAMMATE_STATE_LABELS = {
+  full: '',
+  diff: '【状态更新】（只列出上一轮之后有变化的部分，没列出的和之前一样）',
+  same: '（你的调查员状态和调查笔记和上一轮一样）',
+};
+
+const KP_STATE_LABELS = {
+  full: '【当前状态】（程序自动更新，数值以这里为准）',
+  diff: '【当前状态更新】（程序自动更新。只列出上一轮之后有变化的部分，没列出的和之前一样；数值以最新的为准）',
+  same: '【当前状态】和上一轮一样，没有变化。',
+};
+
+export function kpStateBlock(room: Room) {
+  return stateTail(kpStateSections(room), undefined, KP_STATE_LABELS).text;
 }
 
 const MEMO_RULES = `【秘密备忘】（只有你能看到，玩家、AI 队友和规则助手都看不到）
@@ -211,12 +228,12 @@ export function buildKpSystemPrompt(room: Room, kp: Participant) {
   return parts.filter(Boolean).join('\n');
 }
 
-export function buildKpMessages(room: Room, kp: Participant, history: Message[]): ChatMessage[] {
-  const { turns, push } = turnBuilder();
+export function buildKpMessages(room: Room, kp: Participant, history: Message[], cache?: PromptCache, out?: BuildOut): ChatMessage[] {
+  const { turns, push, own, baseline } = turnBuilder(cache);
   const teammates = new Map(teammatesOf(room).map((p) => [p.id, p]));
   for (const m of usableHistory(history)) {
     if (m.role === 'ai' && m.participantId === kp.id) {
-      push('assistant', m.content.trim());
+      own(m, m.content.trim());
     } else if (m.role === 'ai') {
       const tm = teammates.get(m.participantId ?? '');
       push('user', `【${m.speakerName}（${tm ? 'AI 队友' : '其他'}）】：${m.content.trim()}`);
@@ -255,11 +272,14 @@ export function buildKpMessages(room: Room, kp: Participant, history: Message[])
     ? '上面是刚掷出的骰子结果：从结果直接接着写，写清它带来的后果或调查员的反应，不要把前面已经描述过的场景再写一遍，然后把行动交还给玩家。'
     : '要求检定时，写到需要掷骰的那一刻就停下，不要在同一条消息里再问玩家打算怎么做。';
   const reminder = `（请以守秘人的身份继续。${boundary}${pacing}）`;
-  turns[turns.length - 1].content += `\n\n${kpStateBlock(room)}\n\n${reminder}`;
+  // 第一次附完整状态，之后（历史里的状态链没断时）只附有变化的部分，前缀才能一轮轮原样延续下去
+  const state = stateTail(kpStateSections(room), baseline(), KP_STATE_LABELS);
+  turns[turns.length - 1].content += `${state.text ? `\n\n${state.text}` : ''}\n\n${reminder}`;
+  if (out) Object.assign(out, { prompt: turns[turns.length - 1].content, state: state.state, full: state.full });
   return [{ role: 'system', content: buildKpSystemPrompt(room, kp) }, ...turns];
 }
 
-export function buildTeammateMessages(room: Room, self: Participant, history: Message[]): ChatMessage[] {
+export function buildTeammateMessages(room: Room, self: Participant, history: Message[], cache?: PromptCache, out?: BuildOut): ChatMessage[] {
   const trpg = room.trpg!;
   const kp = kpOf(room);
   const sheet = trpg.sheets[self.id];
@@ -278,9 +298,9 @@ export function buildTeammateMessages(room: Room, self: Participant, history: Me
 - 人类玩家是跑团新手，必要时可以用角色的口吻给一点提示。`,
   ].filter(Boolean);
 
-  const { turns, push } = turnBuilder();
+  const { turns, push, own, baseline } = turnBuilder(cache);
   for (const m of usableHistory(history)) {
-    if (m.role === 'ai' && m.participantId === self.id) push('assistant', m.content.trim());
+    if (m.role === 'ai' && m.participantId === self.id) own(m, m.content.trim());
     else if (m.role === 'ai' && m.participantId === kp?.id) push('user', `【守秘人】：${stripCommands(m.content)}`);
     else if (m.role === 'ai') push('user', `【${m.speakerName}】：${m.content.trim()}`);
     else if (m.role === 'human' && !m.ooc) push('user', `【${playerName(room)}（玩家）】：${m.content.trim()}`);
@@ -289,13 +309,12 @@ export function buildTeammateMessages(room: Room, self: Participant, history: Me
   }
   if (turns.length === 0 || turns[0].role === 'assistant') turns.unshift({ role: 'user', content: '（游戏开始）' });
   if (turns[turns.length - 1].role === 'assistant') turns.push({ role: 'user', content: '（请继续）' });
-  const state = [
-    sheet ? `【你的调查员当前状态】\n${sheetSummary(sheet, trpg.era)}` : '',
-    trpg.notebook && trpg.notes.length ? `【调查笔记】\n${notesText(trpg.notes)}` : '',
-  ]
-    .filter(Boolean)
-    .join('\n\n');
-  turns[turns.length - 1].content += `${state ? `\n\n${state}` : ''}\n\n（现在轮到你「${name}」，简短说出你的台词或行动）`;
+  const sections: [string, string][] = [];
+  if (sheet) sections.push(['sheet', `【你的调查员当前状态】\n${sheetSummary(sheet, trpg.era)}`]);
+  if (trpg.notebook && trpg.notes.length) sections.push(['notes', `【调查笔记】\n${notesText(trpg.notes)}`]);
+  const state = stateTail(sections, baseline(), TEAMMATE_STATE_LABELS, '\n\n');
+  turns[turns.length - 1].content += `${state.text ? `\n\n${state.text}` : ''}\n\n（现在轮到你「${name}」，简短说出你的台词或行动）`;
+  if (out) Object.assign(out, { prompt: turns[turns.length - 1].content, state: state.state, full: state.full });
   return [{ role: 'system', content: system.join('\n') }, ...turns];
 }
 

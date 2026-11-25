@@ -213,10 +213,13 @@ test('拟人模式只有一句提示词，两人对话不加名字', () => {
     { role: 'assistant', content: '嗨' },
     { role: 'user', content: '最近怎么样' },
   ]);
-  // 有第三个人（人类）加入后才带名字
+  // 有第三个人（人类）加入后，从那条消息起带名字；之前的消息不回头改，历史保持不变（提示缓存）
   history.push(msg({ role: 'human', speakerName: '小明', content: '我也来' }));
   const out2 = buildHumanlikeMessages(room, a, history);
-  assert.match(out2.at(-1)!.content, /乙：最近怎么样\n\n小明：我也来/);
+  assert.equal(out2.at(-1)!.content, '最近怎么样\n\n小明：我也来');
+  assert.deepEqual(out2.slice(0, 3), out.slice(0, 3), '之前的历史一字不变');
+  history.push(msg({ role: 'ai', participantId: 'b', speakerName: '乙', content: '欢迎' }));
+  assert.match(buildHumanlikeMessages(room, a, history).at(-1)!.content, /小明：我也来\n\n乙：欢迎$/);
 });
 
 test('笔记：记下、更新、重复不提示、关闭时忽略', () => {

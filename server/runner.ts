@@ -27,10 +27,19 @@ import {
   pickByMention,
   pickRoundRobin,
   stripNamePrefix,
+  type BuildOut,
+  type PromptCache,
+  type SentTurn,
   usableHistory,
 } from './prompt.ts';
 import { newId, type Store } from './store.ts';
 import { WerewolfGame, type WwAnswer } from './werewolf.ts';
+
+/** 测试用：每次请求模型前看一眼发出去的消息（多人对话和跑团） */
+let requestHook: ((roomId: string, participantId: string, messages: WireMessage[]) => void) | undefined;
+export function onModelRequest(fn: typeof requestHook) {
+  requestHook = fn;
+}
 
 type Listener = (ev: RoomEvent) => void;
 
@@ -60,6 +69,9 @@ export class RoomRunner {
   private trimNotified = new Set<string>();
   /** 狼人杀：对局控制和正在发言的玩家 */
   private wwGame?: WerewolfGame;
+  /** 提示缓存：每条 AI 消息生成时最后那条消息的原文和模型的原话（只存在内存里，重启后第一轮重新拼） */
+  private sentTurns = new Map<string, SentTurn>();
+  private promptCache: PromptCache = { sentFor: (m) => this.sentTurns.get(m.id) };
   private wwGenerating: { messageId: string; participantId: string } | null = null;
 
   constructor(
@@ -701,12 +713,12 @@ export class RoomRunner {
     return out;
   }
 
-  private buildMessages(room: Room, p: Participant, history: Message[]): WireMessage[] {
+  private buildMessages(room: Room, p: Participant, history: Message[], cache?: PromptCache, out?: BuildOut): WireMessage[] {
     if (room.mode === 'trpg' && room.trpg) {
-      if (p.role === 'kp') return this.withMaps(room, buildKpMessages(room, p, history));
-      if (p.role === 'player') return buildTeammateMessages(room, p, history);
+      if (p.role === 'kp') return this.withMaps(room, buildKpMessages(room, p, history, cache, out));
+      if (p.role === 'player') return buildTeammateMessages(room, p, history, cache, out);
     }
-    return buildAgentMessages(room, p, history);
+    return buildAgentMessages(room, p, history, cache, out);
   }
 
   /** 按模型的上下文窗口裁掉最早的对话；第一次裁剪时提示一下 */
@@ -805,6 +817,8 @@ export class RoomRunner {
     let ok = true;
     let plan = '';
     let meter: ReturnType<typeof streamMeter> | undefined;
+    const out: BuildOut = {};
+    let raw = '';
     try {
       // 构思 / 执笔：先构思；构思失败时由执笔模型单独完成，不让整轮卡住
       if (planner) {
@@ -819,8 +833,11 @@ export class RoomRunner {
         this.emit({ type: 'message_updated', message });
       }
       const extra = plan ? writerBlock(plan, { kp }) : '';
-      const fit = await this.fitFor(p, model, (h) => appendToLast(this.buildMessages(room, p, h), extra), history);
+      // 提示缓存：拼历史时把之前每一轮最后那条消息的原文和模型的原话放回去（构思 / 执笔的不做：构思会一直留在历史里，太占上下文）
+      const cache = planner ? undefined : this.promptCache;
+      const fit = await this.fitFor(p, model, (h) => appendToLast(this.buildMessages(room, p, h, cache, out), extra), history);
       if (fit.dropped > 0) message.trimmed = Math.max(message.trimmed ?? 0, fit.dropped);
+      requestHook?.(room.id, p.id, fit.messages);
       const stream = streamChat({
         baseUrl: settings.baseUrl,
         apiKey: settings.apiKey,
@@ -850,6 +867,7 @@ export class RoomRunner {
         });
         this.store.touchRoom(room.id);
       }
+      raw = message.content;
       message.status = 'done';
       this.aiTurnsSinceHuman++;
     } catch (err) {
@@ -890,6 +908,10 @@ export class RoomRunner {
         message.status = 'error';
         message.error = message.filtered ? '模型只写了替别人说的话，已经被移除。可以点「重试」重新生成。' : '模型返回了空内容';
         ok = false;
+      }
+      // 记下这一轮发出去的最后那条消息和模型的原话，下一轮原样放回历史
+      if (message.status === 'done' && !planner && out.prompt !== undefined && raw) {
+        this.sentTurns.set(message.id, { prompt: out.prompt, reply: raw, content: message.content, state: out.state, full: out.full });
       }
       this.emit({ type: 'message_updated', message });
     }
